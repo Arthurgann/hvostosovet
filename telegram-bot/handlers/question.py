@@ -1,6 +1,8 @@
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery
+from pyrogram.enums import ChatAction
 from collections import defaultdict
+import asyncio
 import openai
 import config
 
@@ -71,6 +73,7 @@ def setup_question_handlers(app: Client):
 
     @app.on_callback_query(filters.regex("^(dog|cat|other)_(emergency|care|health)$"))
     async def start_unified_form(client_tg: Client, callback_query: CallbackQuery):
+        await callback_query.answer()
         user_id = callback_query.from_user.id
         pet_type, context = callback_query.data.split("_")
 
@@ -118,6 +121,10 @@ def setup_question_handlers(app: Client):
         if not profile:
             return
 
+        if profile["step"] == "done":
+            await message.reply("⌛ Я уже готовлю ответ. Пожалуйста, подождите…")
+            return
+
         step = profile.get("step")
 
         if step == "basic_info":
@@ -154,9 +161,12 @@ def setup_question_handlers(app: Client):
 
             await message.reply("⌛ Ваш запрос обрабатывается нейросетью. Пожалуйста, подождите...")
 
+            await client_tg.send_chat_action(message.chat.id, ChatAction.TYPING)
+
             try:
                 system_prompt = prompts_by_context.get(profile["context"], "")
-                response = client.chat.completions.create(
+                response = await asyncio.to_thread(
+                    client.chat.completions.create,
                     model=config.OPENAI_MODEL,
                     messages=[
                         {"role": "system", "content": system_prompt},

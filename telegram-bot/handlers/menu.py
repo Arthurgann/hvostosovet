@@ -7,6 +7,7 @@ def setup_menu_handlers(app: Client):
 
     @app.on_callback_query(filters.regex("^pet_"))
     async def handle_pet_selection(client: Client, callback_query: CallbackQuery):
+        await callback_query.answer()
         pet_type = callback_query.data.split("_")[1]  # dog, cat, other
 
         await callback_query.message.edit_text(
@@ -21,6 +22,7 @@ def setup_menu_handlers(app: Client):
 
     @app.on_callback_query(filters.regex("^back_to_main$"))
     async def back_to_main(client: Client, callback_query: CallbackQuery):
+        await callback_query.answer()
         await callback_query.message.edit_text(
             "Привет! 🐾 Я — ХвостоСовет, твой помощник по заботе о питомце.\n\nВыберите, кто ваш питомец:",
             reply_markup=InlineKeyboardMarkup([

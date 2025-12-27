@@ -16,6 +16,9 @@ venv/
 **/.env
 .env.*
 
+# allow template env file
+!**/.env.example
+
 # Pyrogram session files (локально)
 *.session
 *.session-journal
