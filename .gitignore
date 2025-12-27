@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual env
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Env secrets
+.env
+**/.env
+.env.*
+
+# Pyrogram session files (локально)
+*.session
+*.session-journal
+
+# OS
+.DS_Store
+Thumbs.db
