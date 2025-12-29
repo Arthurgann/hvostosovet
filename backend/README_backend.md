@@ -87,3 +87,8 @@ curl -H "Authorization: Bearer $env:BOT_BACKEND_TOKEN" http://127.0.0.1:8000/v1/
 - Файл `.env` **не коммитится**
 - Для Supabase локально используйте **Session pooler**
 - Если `/v1/health` показывает `db: fail` — сначала проверьте `DATABASE_URL`
+- Для `POST /v1/chat/ask` используется idempotency по заголовку `X-Request-Id`
+- Таблица `request_dedup` расширена (response_json nullable, status/finished_at/error_text) — изменения применены через Supabase SQL Editor
+- Повторный запрос с тем же `X-Request-Id` возвращает сохранённый ответ с заголовком `X-Dedup-Hit: 1`
+- Для POST /v1/chat/ask применяются rate limits (daily_utc + cooldown), при превышении возвращается HTTP 429
+
