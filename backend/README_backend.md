@@ -79,8 +79,12 @@ curl -H "Authorization: Bearer $env:BOT_BACKEND_TOKEN" http://127.0.0.1:8000/v1/
 Доступные эндпоинты:
 - `GET /v1/health`
 - `GET /v1/me` (Authorization required)
-- `POST /v1/chat/ask` (Authorization required)
+- `POST /v1/chat/ask` — основной endpoint для получения ответа от LLM  
+  Используется Telegram-ботом (и в будущем web/PWA).
 
+Требуемые заголовки:
+- `Authorization: Bearer <BOT_BACKEND_TOKEN>`
+- `X-Request-Id: UUID` (idempotency)
 ---
 
 ## Notes
@@ -91,4 +95,5 @@ curl -H "Authorization: Bearer $env:BOT_BACKEND_TOKEN" http://127.0.0.1:8000/v1/
 - Таблица `request_dedup` расширена (response_json nullable, status/finished_at/error_text) — изменения применены через Supabase SQL Editor
 - Повторный запрос с тем же `X-Request-Id` возвращает сохранённый ответ с заголовком `X-Dedup-Hit: 1`
 - Для POST /v1/chat/ask применяются rate limits (daily_utc + cooldown), при превышении возвращается HTTP 429
+- Telegram-бот использует backend `/v1/chat/ask` вместо прямого вызова OpenAI
 
