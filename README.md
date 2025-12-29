@@ -1,17 +1,24 @@
 # Хвостосовет (2025–2026)
 
-Чат-бот для помощи владельцам домашних животных.  
-Сейчас работает Telegram-бот. В планах — вынести “мозг” в отдельный backend (API + БД) и добавить web/PWA/приложение как альтернативные клиенты (на случай проблем с Telegram).
+Чат-бот/сервис помощи владельцам домашних животных.
+
+Текущая архитектура (MVP):
+**Telegram-бот → Backend API → Supabase (Postgres) → LLM → Backend → Telegram-бот**
+
+- **Telegram-бот** — “тонкий клиент”: собирает ввод и отправляет запрос в backend.
+- **Backend** — “мозг”: лимиты, дедуп, тарифы/политики LLM, работа с БД, вызов LLM.
+- В планах: **web/PWA** как альтернативный клиент.
 
 ## Структура репозитория
 
-- telegram-bot/ — рабочий Telegram-бот (Python + Pyrogram + OpenAI)
-- backend/ — заготовка под будущий backend (API + БД + storage)
+- telegram-bot/ — Telegram-бот (Python + Pyrogram), **ходит в backend API**
+- backend/ — Backend API (FastAPI) + Supabase(Postgres) + LLM
 - web/ — заготовка под web/PWA (альтернативный клиент)
 - docs/ — документация и заметки по архитектуре/плану
 - .gitignore — игнор локальных файлов (.venv, .env, кеши и т.д.)
 
-Важно: у каждого сервиса свой .env в своей папке. Сейчас используется telegram-bot/.env.
+Важно: у каждого сервиса свой `.env` в своей папке.  
+**`.env` не коммитим**, коммитим только `.env.example`.
 
 ## Быстрый старт: Telegram-бот (Windows + VS Code)
 
@@ -40,20 +47,37 @@
 
 ## Пример telegram-bot/.env
 
+ ⚠️ В текущей архитектуре бот не использует OPENAI_API_KEY напрямую.
+ Вся работа с LLM — внутри backend.
+
     BOT_TOKEN=123456:ABCDEF...
     API_ID=12345678
     API_HASH=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    OPENAI_API_KEY=sk-...
-    OPENAI_MODEL=gpt-4.1-mini
+    BACKEND_BASE_URL=http://127.0.0.1:8000
+    BOT_BACKEND_TOKEN=devtoken123
+
+## Backend (API)
+
+Backend реализован на FastAPI и используется Telegram-ботом как основной источник логики.
+
+Что делает backend (MVP):
+
+- Bearer Auth (bot → backend) через BOT_BACKEND_TOKEN
+- Idempotency (дедуп) по заголовку X-Request-Id и таблице request_dedup
+- Rate limit (daily window + cooldown) через таблицу rate_limits
+- Вызов LLM по политикам (llm_policies: free_default, pro_default, pro_research)
+- Заглушки Pro-эндпоинтов (402) для будущих фич: профиль питомца/история/медиа/удаление данных
 
 ## Примечания
 
-- .venv/, .env, __pycache__/, *.session — локальные файлы, в git не добавляются.
+- Не коммитить: .env, .venv/, __pycache__/, *.session
+- Токены/ключи — только через .env (локально/на сервере)
+- BOT_BACKEND_TOKEN в проде должен быть уникальным и секретным
 - Если Telegram временно недоступен, планируется web/PWA-клиент на том же backend.
 
 ## Roadmap (кратко)
 
-1. Backend (FastAPI) + БД: пользователи, питомцы, история, лимиты, тарифы
-2. Telegram-бот как “тонкий клиент” (бот → API → ответ)
-3. Фото/аудио + сохранение контекста (для PRO)
+1. Backend MVP (API + Supabase + LLM policies + лимиты + дедуп) ✅ / в процессе деплоя
+2. Деплой backend на VPS + smoke на проде
+3. Pro-фичи: профиль питомца/история/память → фото → аудио
 4. Web/PWA как альтернативный канал
