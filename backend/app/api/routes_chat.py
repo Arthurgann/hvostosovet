@@ -1,7 +1,10 @@
 import json
+import os
+import socket
 import uuid
 from datetime import datetime, timedelta, timezone
-import os
+from urllib import request
+from urllib.error import HTTPError, URLError
 
 from fastapi import APIRouter, Body, Depends, Header, Response, status
 from fastapi.responses import JSONResponse
@@ -14,6 +17,10 @@ from app.core.db import get_connection
 router = APIRouter()
 
 
+class LlmTimeoutError(Exception):
+    pass
+
+
 class ChatAskUser(BaseModel):
     telegram_user_id: int
 
@@ -21,6 +28,55 @@ class ChatAskUser(BaseModel):
 class ChatAskPayload(BaseModel):
     user: ChatAskUser
     text: str | None = None
+
+
+def _call_openai_chat(prompt_text: str, timeout_sec: int = 60) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("missing_openai_api_key")
+
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful veterinary assistant."},
+            {"role": "user", "content": prompt_text},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 400,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+    )
+
+    try:
+        with request.urlopen(req, timeout=timeout_sec) as resp:
+            body = resp.read().decode("utf-8")
+    except HTTPError as exc:
+        raise RuntimeError(f"openai_http_{exc.code}") from exc
+    except URLError as exc:
+        if isinstance(exc.reason, socket.timeout):
+            raise LlmTimeoutError("openai_timeout") from exc
+        raise RuntimeError("openai_url_error") from exc
+    except socket.timeout as exc:
+        raise LlmTimeoutError("openai_timeout") from exc
+
+    response_json = json.loads(body)
+    choices = response_json.get("choices") or []
+    if not choices:
+        raise RuntimeError("openai_empty_choices")
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if not content:
+        raise RuntimeError("openai_empty_content")
+    return content.strip()
 
 
 @router.post("/chat/ask", dependencies=[Depends(require_bot_token)])
@@ -83,6 +139,19 @@ def chat_ask(
                         status_code=status.HTTP_409_CONFLICT,
                         content={"error": "request_in_progress"},
                     )
+
+            if not payload.text or not payload.text.strip():
+                cur.execute(
+                    "update request_dedup "
+                    "set status = 'failed', error_text = 'missing_text', finished_at = now() "
+                    "where request_id = %s",
+                    (x_request_id,),
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={"error": "missing_text"},
+                )
+
             now = datetime.now(timezone.utc)
             daily_limit = int(os.getenv("FREE_DAILY_LIMIT", "3"))
             cooldown_sec_default = int(os.getenv("COOLDOWN_SEC", "25"))
@@ -192,8 +261,33 @@ def chat_ask(
                         (window_start_at, window_end_at, count + 1, now, user_id),
                     )
 
+            try:
+                answer_text = _call_openai_chat(payload.text)
+            except LlmTimeoutError:
+                cur.execute(
+                    "update request_dedup "
+                    "set status = 'failed', error_text = 'llm_timeout', finished_at = now() "
+                    "where request_id = %s",
+                    (x_request_id,),
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    content={"error": "llm_timeout"},
+                )
+            except Exception:
+                cur.execute(
+                    "update request_dedup "
+                    "set status = 'failed', error_text = 'llm_failed', finished_at = now() "
+                    "where request_id = %s",
+                    (x_request_id,),
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    content={"error": "llm_failed"},
+                )
+
             result = {
-                "answer_text": "",
+                "answer_text": answer_text,
                 "safety_level": "low",
                 "recommended_actions": [],
                 "should_go_to_vet": False,
