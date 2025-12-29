@@ -88,8 +88,11 @@ create table if not exists llm_policies (
 
 create table if not exists request_dedup (
     request_id uuid primary key,
-    user_id uuid references users(id),
+    user_id uuid references users(id) null,
     created_at timestamptz not null default now(),
-    response_json jsonb not null
+    response_json jsonb null,
+    status text not null default 'started',
+    finished_at timestamptz null,
+    error_text text null
 );
 create index if not exists request_dedup_user_id_created_at_idx on request_dedup(user_id, created_at desc);
