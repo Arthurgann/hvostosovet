@@ -5,6 +5,7 @@ import os
 
 from fastapi import APIRouter, Body, Depends, Header, Response, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from psycopg.types.json import Json
 
 from app.core.auth import require_bot_token
@@ -13,11 +14,20 @@ from app.core.db import get_connection
 router = APIRouter()
 
 
+class ChatAskUser(BaseModel):
+    telegram_user_id: int
+
+
+class ChatAskPayload(BaseModel):
+    user: ChatAskUser
+    text: str | None = None
+
+
 @router.post("/chat/ask", dependencies=[Depends(require_bot_token)])
 def chat_ask(
     response: Response,
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
-    payload: dict | None = Body(default=None),
+    payload: ChatAskPayload = Body(...),
 ):
     if not x_request_id:
         return JSONResponse(
@@ -79,11 +89,7 @@ def chat_ask(
             window_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
             window_end = window_start + timedelta(days=1)
 
-            telegram_user_id = None
-            if isinstance(payload, dict):
-                user_obj = payload.get("user")
-                if isinstance(user_obj, dict):
-                    telegram_user_id = user_obj.get("telegram_user_id")
+            telegram_user_id = payload.user.telegram_user_id
             if telegram_user_id is not None:
                 cur.execute(
                     "select id from users where telegram_user_id = %s",
