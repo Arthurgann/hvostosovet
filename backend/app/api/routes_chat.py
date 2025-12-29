@@ -350,3 +350,35 @@ def chat_ask(
                 raise
 
     return result
+
+
+@router.post("/pets/upsert", dependencies=[Depends(require_bot_token)])
+def pets_upsert():
+    return JSONResponse(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        content={"error": "pro_required"},
+    )
+
+
+@router.get("/history", dependencies=[Depends(require_bot_token)])
+def history():
+    return JSONResponse(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        content={"error": "pro_required"},
+    )
+
+
+@router.post("/media/init", dependencies=[Depends(require_bot_token)])
+def media_init():
+    return JSONResponse(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        content={"error": "pro_required"},
+    )
+
+
+@router.post("/data/delete", dependencies=[Depends(require_bot_token)])
+def data_delete():
+    return JSONResponse(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        content={"error": "pro_required"},
+    )
