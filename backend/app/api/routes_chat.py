@@ -30,20 +30,25 @@ class ChatAskPayload(BaseModel):
     text: str | None = None
 
 
-def _call_openai_chat(prompt_text: str, timeout_sec: int = 60) -> str:
+def _call_openai_chat(
+    prompt_text: str,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    timeout_sec: int,
+) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("missing_openai_api_key")
 
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": "You are a helpful veterinary assistant."},
             {"role": "user", "content": prompt_text},
         ],
-        "temperature": 0.2,
-        "max_tokens": 400,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     }
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(
@@ -261,8 +266,37 @@ def chat_ask(
                         (window_start_at, window_end_at, count + 1, now, user_id),
                     )
 
+            policy = "free_default"
+            policies = {
+                "free_default": {
+                    "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                    "temperature": 0.2,
+                    "max_tokens": 400,
+                    "timeout_sec": 60,
+                },
+                "pro_default": {
+                    "model": os.getenv("OPENAI_MODEL_PRO", "gpt-4o-mini"),
+                    "temperature": 0.2,
+                    "max_tokens": 600,
+                    "timeout_sec": 60,
+                },
+                "pro_research": {
+                    "model": os.getenv("OPENAI_MODEL_RESEARCH", "gpt-4o-mini"),
+                    "temperature": 0.1,
+                    "max_tokens": 800,
+                    "timeout_sec": 90,
+                },
+            }
+            llm_params = policies[policy]
+
             try:
-                answer_text = _call_openai_chat(payload.text)
+                answer_text = _call_openai_chat(
+                    payload.text,
+                    model=llm_params["model"],
+                    temperature=llm_params["temperature"],
+                    max_tokens=llm_params["max_tokens"],
+                    timeout_sec=llm_params["timeout_sec"],
+                )
             except LlmTimeoutError:
                 cur.execute(
                     "update request_dedup "
