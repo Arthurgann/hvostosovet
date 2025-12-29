@@ -2,9 +2,12 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery
 from pyrogram.enums import ChatAction
 import asyncio
+import json
+import os
+import uuid
+from urllib import request
+from urllib.error import HTTPError, URLError
 import config
-
-from services.llm import ask_llm
 from services.state import (
     get_profile,
     start_profile,
@@ -12,6 +15,44 @@ from services.state import (
     set_question,
     clear_profile,
 )
+
+
+def _post_chat_ask(telegram_user_id: int, text: str, timeout_sec: int = 25) -> tuple[int, dict]:
+    base_url = os.getenv("BACKEND_BASE_URL", "").strip().rstrip("/")
+    token = os.getenv("BOT_BACKEND_TOKEN", "").strip()
+    if not base_url or not token:
+        raise RuntimeError("missing_backend_config")
+
+    payload = {"user": {"telegram_user_id": telegram_user_id}, "text": text}
+    data = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        f"{base_url}/v1/chat/ask",
+        data=data,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "X-Request-Id": str(uuid.uuid4()),
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with request.urlopen(req, timeout=timeout_sec) as resp:
+            status_code = resp.getcode()
+            raw = resp.read()
+    except HTTPError as exc:
+        status_code = exc.code
+        raw = exc.read()
+    except URLError as exc:
+        raise RuntimeError("backend_unreachable") from exc
+
+    body = {}
+    if raw:
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError:
+            body = {}
+    return status_code, body
 
 
 def setup_question_handlers(app: Client):
@@ -105,12 +146,30 @@ def setup_question_handlers(app: Client):
             await client_tg.send_chat_action(message.chat.id, ChatAction.TYPING)
 
             try:
-                answer = await ask_llm(profile["context"], summary)
-                await message.reply(f"🧠 Ответ:\n\n{answer}")
+                status_code, body = await asyncio.to_thread(
+                    _post_chat_ask, user_id, summary, 25
+                )
+                if status_code == 200:
+                    answer = (body.get("answer_text") or "").strip()
+                    if not answer:
+                        raise RuntimeError("empty_answer")
+                    await message.reply(f"🧠 Ответ:\n\n{answer}")
+                elif status_code == 429:
+                    cooldown_sec = body.get("cooldown_sec")
+                    if isinstance(cooldown_sec, int):
+                        await message.reply(f"⚠️ Лимит, подождите {cooldown_sec} сек.")
+                    else:
+                        await message.reply("⚠️ Лимит, подождите немного.")
+                elif status_code == 402:
+                    await message.reply("⚠️ Нужен Pro.")
+                elif status_code in (401, 403):
+                    await message.reply("⚠️ Ошибка авторизации.")
+                else:
+                    await message.reply("⚠️ Ошибка, попробуйте позже.")
 
             except Exception as e:
-                print(f"[question] LLM error for user_id={user_id}: {e}")
-                await message.reply("⚠️ Не удалось получить ответ. Попробуйте ещё раз чуть позже.")
+                print(f"[question] Backend error for user_id={user_id}: {e}")
+                await message.reply("⚠️ Ошибка, попробуйте позже.")
 
             finally:
                 clear_profile(user_id)
