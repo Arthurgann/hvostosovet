@@ -1,10 +1,9 @@
 import json
+import logging
 import os
-import socket
+import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from urllib import request
-from urllib.error import HTTPError, URLError
 
 from fastapi import APIRouter, Body, Depends, Header, Response, status
 from fastapi.responses import JSONResponse
@@ -13,12 +12,10 @@ from psycopg.types.json import Json
 
 from app.core.auth import require_bot_token
 from app.core.db import get_connection
+from app.services import LlmTimeoutError, ask_llm
 
 router = APIRouter()
-
-
-class LlmTimeoutError(Exception):
-    pass
+logger = logging.getLogger("hvostosovet")
 
 
 class ChatAskUser(BaseModel):
@@ -28,60 +25,6 @@ class ChatAskUser(BaseModel):
 class ChatAskPayload(BaseModel):
     user: ChatAskUser
     text: str | None = None
-
-
-def _call_openai_chat(
-    prompt_text: str,
-    model: str,
-    temperature: float,
-    max_tokens: int,
-    timeout_sec: int,
-) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("missing_openai_api_key")
-
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "You are a helpful veterinary assistant."},
-            {"role": "user", "content": prompt_text},
-        ],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    data = json.dumps(payload).encode("utf-8")
-    req = request.Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=data,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-    )
-
-    try:
-        with request.urlopen(req, timeout=timeout_sec) as resp:
-            body = resp.read().decode("utf-8")
-    except HTTPError as exc:
-        raise RuntimeError(f"openai_http_{exc.code}") from exc
-    except URLError as exc:
-        if isinstance(exc.reason, socket.timeout):
-            raise LlmTimeoutError("openai_timeout") from exc
-        raise RuntimeError("openai_url_error") from exc
-    except socket.timeout as exc:
-        raise LlmTimeoutError("openai_timeout") from exc
-
-    response_json = json.loads(body)
-    choices = response_json.get("choices") or []
-    if not choices:
-        raise RuntimeError("openai_empty_choices")
-    message = choices[0].get("message") or {}
-    content = message.get("content")
-    if not content:
-        raise RuntimeError("openai_empty_content")
-    return content.strip()
 
 
 @router.post("/chat/ask", dependencies=[Depends(require_bot_token)])
@@ -290,13 +233,7 @@ def chat_ask(
             llm_params = policies[policy]
 
             try:
-                answer_text = _call_openai_chat(
-                    payload.text,
-                    model=llm_params["model"],
-                    temperature=llm_params["temperature"],
-                    max_tokens=llm_params["max_tokens"],
-                    timeout_sec=llm_params["timeout_sec"],
-                )
+                answer_text = ask_llm(payload.text)
             except LlmTimeoutError:
                 cur.execute(
                     "update request_dedup "
@@ -308,12 +245,20 @@ def chat_ask(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                     content={"error": "llm_timeout"},
                 )
-            except Exception:
+            except Exception as e:
+                logger.exception(
+                    "LLM failed request_id=%s user=%s err=%r",
+                    x_request_id,
+                    payload.user.telegram_user_id,
+                    e,
+                )
+                traceback.print_exc()
+                error_text = str(e)[:200]
                 cur.execute(
                     "update request_dedup "
-                    "set status = 'failed', error_text = 'llm_failed', finished_at = now() "
+                    "set status = 'failed', error_text = %s, finished_at = now() "
                     "where request_id = %s",
-                    (x_request_id,),
+                    (error_text, x_request_id),
                 )
                 return JSONResponse(
                     status_code=status.HTTP_502_BAD_GATEWAY,
