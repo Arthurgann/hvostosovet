@@ -5,6 +5,11 @@ Telegram-bot → Backend API → DB → LLM
 
 ---
 
+## Prod deploy
+См. docs/DEPLOY_BACKEND.md (VPS Beget, Docker, Traefik, .env.prod, smoke).
+
+---
+
 ## Requirements
 - Python 3.11+
 - (Optional) Docker — **только если используется локальный Postgres**
@@ -87,6 +92,17 @@ curl -H "Authorization: Bearer $env:BOT_BACKEND_TOKEN" http://127.0.0.1:8000/v1/
 - `X-Request-Id: UUID` (idempotency)
 ---
 
+### POST /v1/chat/ask (Windows PowerShell)
+Рекомендуется Invoke-RestMethod (curl.exe часто ломает JSON):
+
+```powershell
+$rid = [guid]::NewGuid().ToString()
+$headers = @{ Authorization = "Bearer $env:BOT_BACKEND_TOKEN"; "X-Request-Id" = $rid }
+$body = @{ user = @{ telegram_user_id = 999002 }; text = "test" } | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/chat/ask" -Headers $headers -ContentType "application/json" -Body $body
+
+---
+
 ## Notes
 - Файл `.env` **не коммитится**
 - Для Supabase локально используйте **Session pooler**
@@ -97,3 +113,4 @@ curl -H "Authorization: Bearer $env:BOT_BACKEND_TOKEN" http://127.0.0.1:8000/v1/
 - Для POST /v1/chat/ask применяются rate limits (daily_utc + cooldown), при превышении возвращается HTTP 429
 - При `llm_failed` пишется traceback в logs, а причина сохраняется в `request_dedup.error_text`
 - Telegram-бот использует backend `/v1/chat/ask` вместо прямого вызова OpenAI
+- LLM слой вынесен в app/services (llm.py + openai_client.py), routes_chat.py только роутер.

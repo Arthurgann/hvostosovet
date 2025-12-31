@@ -4,6 +4,7 @@
 
 **ХвостоСовет** — Telegram-бот, помогающий владельцам домашних животных получать рекомендации по уходу, питанию, симптомам и профилактике.  
 Работает через кнопки, анкету питомца и backend API, который отвечает за генерацию ответов через LLM.
+Бот — тонкий клиент: НЕ вызывает OpenAI напрямую и НЕ требует OPENAI_API_KEY.
 
 ---
 
@@ -74,6 +75,22 @@ POST /v1/chat/ask
 
 - `BACKEND_BASE_URL` — базовый URL backend API (например `http://127.0.0.1:8000`)
 - `BOT_BACKEND_TOKEN` — токен авторизации для запросов bot → backend
+
+---
+
+## .env (локально)
+BACKEND_BASE_URL=http://127.0.0.1:8000
+BOT_BACKEND_TOKEN=devtoken123
+
+## .env.prod (на VPS)
+BACKEND_BASE_URL=https://api.tailadvice.ru
+BOT_BACKEND_TOKEN=... (тот же что в backend)
+BOT_TOKEN=... (Telegram token)
+
+---
+
+## Prod deploy
+См. docs/DEPLOY_TELEGRAM_BOT.md
 
 ---
 

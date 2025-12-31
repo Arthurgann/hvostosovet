@@ -135,3 +135,13 @@ PRO:
 
 Этот файл — визуальная карта проекта.  
 Он фиксирует структуру, архитектуру и направление развития.
+
+## Текущий статус (декабрь 2025)
+- Backend (FastAPI) задеплоен на VPS и доступен по https://api.tailadvice.ru ✅
+- Telegram-бот задеплоен на VPS в Docker (тонкий клиент) ✅
+- Архитектура: Telegram → Backend API → LLM ✅
+
+Документация по деплою:
+- docs/DEPLOY_BACKEND.md
+- docs/DEPLOY_TELEGRAM_BOT.md
+
