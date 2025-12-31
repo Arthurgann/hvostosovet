@@ -23,7 +23,7 @@ BOT_TOKEN = _need("BOT_TOKEN")
 API_ID = int(_need("API_ID"))
 
 API_HASH = _need("API_HASH")
-OPENAI_API_KEY = _need("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # Модель можно не задавать — будет дефолт
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip()

@@ -31,6 +31,7 @@
 - `.env.prod` НЕ трогаем при обновлениях кода.
 - Внутри `backend/` НЕ должно быть `.venv`, `.env`, `docker-compose.yml`.
 - Backend в проде НЕ запускается руками — только через Docker.
+- Telegram-бот деплоится отдельно (см. `docs/DEPLOY_TELEGRAM_BOT.md`).
 
 ## 3) Как backend запускается в проде (принцип)
 
@@ -112,7 +113,13 @@ Invoke-RestMethod -Method Post -Uri "https://api.tailadvice.ru/v1/chat/ask" -Hea
 
 Ожидаемо: ответ с `answer_text`.
 
-## 6) Частые ошибки
+## 6) Быстрая диагностика и Частые ошибки
+
+Проверить, что env подхватился в контейнере (без утечки секретов):
+
+docker exec -it hvost-backend sh -lc "env | egrep 'BOT_BACKEND_TOKEN|OPENAI_MODEL|LLM_TIMEOUT_S' | sed 's/=.*/=***masked***/'"
+
+Частые ошибки:
 
 - **401 Unauthorized** — неверный токен.
 - **422 Unprocessable Entity** — битый JSON (использовать `Invoke-RestMethod`).
