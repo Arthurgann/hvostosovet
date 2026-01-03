@@ -26,6 +26,8 @@ Telegram-bot → Backend API → DB → LLM
 ```env
 BOT_BACKEND_TOKEN=your-secret-token
 DATABASE_URL=postgresql://...
+SESSION_TTL_MIN=60
+SESSION_MAX_TURNS=6
 ```
 
 #### ⚠️ Supabase — важно
@@ -114,3 +116,5 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/chat/ask" -Headers
 - При `llm_failed` пишется traceback в logs, а причина сохраняется в `request_dedup.error_text`
 - Telegram-бот использует backend `/v1/chat/ask` вместо прямого вызова OpenAI
 - LLM слой вынесен в app/services (llm.py + openai_client.py), routes_chat.py только роутер.
+- TTL-сессии: краткая память диалога хранится в таблице `sessions` (jsonb `session_context.turns[{q,a}]`), управляется `SESSION_TTL_MIN` и `SESSION_MAX_TURNS`.
+

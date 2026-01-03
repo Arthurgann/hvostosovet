@@ -13,7 +13,7 @@ from services.state import (
     start_profile,
     set_basic_info,
     set_question,
-    clear_profile,
+    set_waiting_question,
 )
 
 
@@ -56,7 +56,6 @@ def _post_chat_ask(telegram_user_id: int, text: str, timeout_sec: int = 25) -> t
 
 
 def setup_question_handlers(app: Client):
-
     @app.on_callback_query(filters.regex("^(dog|cat|other)_(emergency|care|health)$"))
     async def start_unified_form(client_tg: Client, callback_query: CallbackQuery):
         await callback_query.answer()
@@ -95,10 +94,17 @@ def setup_question_handlers(app: Client):
             disable_web_page_preview=True
         )
 
-    @app.on_message(filters.text & filters.private)
+    @app.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
     async def collect_unified_info(client_tg: Client, message: Message):
         user_id = message.from_user.id
         profile = get_profile(user_id)
+
+        if not profile:
+            start_profile(user_id)
+            profile = get_profile(user_id)
+
+        if config.BOT_DEBUG:
+            print(f"[Q-HANDLER] user_id={user_id} has_profile={bool(profile)} step={profile.get('step') if profile else None}")
 
         if not profile:
             return
@@ -146,9 +152,14 @@ def setup_question_handlers(app: Client):
             await client_tg.send_chat_action(message.chat.id, ChatAction.TYPING)
 
             try:
+                if config.BOT_DEBUG:
+                    print(f"[HTTP] POST /v1/chat/ask user_id={user_id} bytes={len(summary.encode('utf-8'))}")
                 status_code, body = await asyncio.to_thread(
                     _post_chat_ask, user_id, summary, 25
                 )
+                body_keys = ",".join(sorted(body.keys())) if isinstance(body, dict) else ""
+                if config.BOT_DEBUG:
+                    print(f"[HTTP] status={status_code} user_id={user_id} body_keys={body_keys}")
                 if status_code == 200:
                     answer = (body.get("answer_text") or "").strip()
                     if not answer:
@@ -168,8 +179,10 @@ def setup_question_handlers(app: Client):
                     await message.reply("⚠️ Ошибка, попробуйте позже.")
 
             except Exception as e:
+                if config.BOT_DEBUG:
+                    print(f"[HTTP] error user_id={user_id} err={e}")
                 print(f"[question] Backend error for user_id={user_id}: {e}")
                 await message.reply("⚠️ Ошибка, попробуйте позже.")
 
             finally:
-                clear_profile(user_id)
+                set_waiting_question(user_id)

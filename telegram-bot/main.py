@@ -1,4 +1,5 @@
-from pyrogram import Client
+from pyrogram import Client, filters
+from pyrogram.types import Message
 import config
 
 app = Client(
@@ -7,6 +8,13 @@ app = Client(
     api_id=config.API_ID,
     api_hash=config.API_HASH
 )
+
+@app.on_message(filters.private & filters.text, group=-1)
+async def log_incoming_private(client_tg: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else None
+    text = message.text or ""
+    if config.BOT_DEBUG:
+        print(f"[IN] user_id={user_id} text={text}")
 
 # 🔌 Подключение всех хендлеров
 from handlers.start import setup_start_handlers

@@ -5,7 +5,7 @@ _user_profiles = defaultdict(dict)
 def get_profile(user_id: int) -> dict | None:
     return _user_profiles.get(user_id)
 
-def start_profile(user_id: int, pet_type: str, context: str) -> dict:
+def start_profile(user_id: int, pet_type: str = "unknown", context: str = "unknown") -> dict:
     _user_profiles[user_id] = {"type": pet_type, "context": context, "step": "basic_info"}
     return _user_profiles[user_id]
 
@@ -18,6 +18,12 @@ def set_question(user_id: int, text: str) -> None:
     p = _user_profiles[user_id]
     p["question"] = text.strip()
     p["step"] = "done"
+
+def set_waiting_question(user_id: int) -> None:
+    p = _user_profiles.get(user_id)
+    if not p:
+        return
+    p["step"] = "question"
 
 def clear_profile(user_id: int) -> None:
     _user_profiles.pop(user_id, None)
