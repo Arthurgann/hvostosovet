@@ -25,3 +25,34 @@ Invoke-RestMethod `
   } `
   -ContentType "application/json" `
   -Body $body
+
+# TTL sessions (set SESSION_TTL_MIN=1 for quick expiry checks)
+$reqIdA = [guid]::NewGuid().ToString()
+$bodyA = @{
+  user = @{ telegram_user_id = 999002 }
+  text = "У собаки болит лапа, что можно сделать дома?"
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:8000/v1/chat/ask" `
+  -Headers @{
+    Authorization  = "Bearer $env:BOT_BACKEND_TOKEN"
+    "X-Request-Id" = $reqIdA
+  } `
+  -ContentType "application/json" `
+  -Body $bodyA
+
+$reqIdB = [guid]::NewGuid().ToString()
+$bodyB = @{
+  user = @{ telegram_user_id = 999002 }
+  text = "А если собака еще хромает, стоит ли срочно в клинику?"
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:8000/v1/chat/ask" `
+  -Headers @{
+    Authorization  = "Bearer $env:BOT_BACKEND_TOKEN"
+    "X-Request-Id" = $reqIdB
+  } `
+  -ContentType "application/json" `
+  -Body $bodyB

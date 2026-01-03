@@ -13,6 +13,11 @@ from psycopg.types.json import Json
 from app.core.auth import require_bot_token
 from app.core.db import get_connection
 from app.services import LlmTimeoutError, ask_llm
+from app.services.sessions import (
+    build_context_prefix,
+    get_active_session,
+    upsert_session_turn,
+)
 
 router = APIRouter()
 logger = logging.getLogger("hvostosovet")
@@ -107,6 +112,7 @@ def chat_ask(
             window_end = window_start + timedelta(days=1)
 
             telegram_user_id = payload.user.telegram_user_id
+            user_id = None
             if telegram_user_id is not None:
                 cur.execute(
                     "select id from users where telegram_user_id = %s",
@@ -209,6 +215,19 @@ def chat_ask(
                         (window_start_at, window_end_at, count + 1, now, user_id),
                     )
 
+            session_prefix = ""
+            if user_id:
+                active_session = get_active_session(cur, user_id)
+                if active_session:
+                    session_prefix = build_context_prefix(
+                        active_session.get("session_context")
+                    )
+
+            original_text = payload.text
+            final_user_text = original_text
+            if session_prefix:
+                final_user_text = f"{session_prefix}\n\nТекущий вопрос: {original_text}"
+
             policy = "free_default"
             policies = {
                 "free_default": {
@@ -233,7 +252,7 @@ def chat_ask(
             llm_params = policies[policy]
 
             try:
-                answer_text = ask_llm(payload.text)
+                answer_text = ask_llm(final_user_text)
             except LlmTimeoutError:
                 cur.execute(
                     "update request_dedup "
@@ -264,6 +283,16 @@ def chat_ask(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     content={"error": "llm_failed"},
                 )
+
+            if user_id:
+                try:
+                    upsert_session_turn(cur, user_id, payload.text, answer_text)
+                except Exception:
+                    logger.exception(
+                        "Failed to update session request_id=%s user_id=%s",
+                        x_request_id,
+                        user_id,
+                    )
 
             result = {
                 "answer_text": answer_text,
