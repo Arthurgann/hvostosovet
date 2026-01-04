@@ -1,5 +1,5 @@
 from pyrogram import Client, filters
-from pyrogram.types import Message, CallbackQuery
+from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ChatAction
 import asyncio
 import os
@@ -32,6 +32,11 @@ def normalize_mode(value: str | None) -> str:
 
 
 def setup_question_handlers(app: Client):
+    @app.on_callback_query(filters.regex("^upsell_pro$"))
+    async def handle_upsell_pro(client_tg: Client, callback_query: CallbackQuery):
+        await callback_query.answer()
+        await callback_query.message.reply("💎 Оформление Pro скоро появится. Спасибо за интерес!")
+
     @app.on_callback_query(filters.regex("^(dog|cat|other)_(emergency|care|vaccines|health)$"))
     async def start_unified_form(client_tg: Client, callback_query: CallbackQuery):
         await callback_query.answer()
@@ -168,14 +173,21 @@ def setup_question_handlers(app: Client):
                 elif status == 429:
                     reset_at = None
                     limits = result.get("limits")
+                    upsell = None
                     if isinstance(body, dict):
                         reset_at = body.get("reset_at")
-                    if reset_at is None and isinstance(limits, dict):
-                        reset_at = limits.get("reset_at")
+                        limits = body.get("limits") or limits
+                    if isinstance(limits, dict):
+                        reset_at = reset_at or limits.get("reset_at")
+                        upsell = limits.get("upsell")
                     message_text = "🆓 Лимит Free на сегодня исчерпан. Приходите завтра."
-                    if reset_at:
-                        message_text = f"{message_text}\nСброс: {reset_at}"
-                    await message.reply(message_text)
+                    reply_markup = None
+                    if isinstance(upsell, dict):
+                        cta = (upsell.get("cta") or "Оформить Pro").strip()
+                        reply_markup = InlineKeyboardMarkup(
+                            [[InlineKeyboardButton(cta, callback_data="upsell_pro")]]
+                        )
+                    await message.reply(message_text, reply_markup=reply_markup)
                 elif status in (401, 403):
                     await message.reply("Ошибка авторизации между ботом и сервером (BOT_BACKEND_TOKEN).")
                 elif isinstance(status, int) and status >= 500:

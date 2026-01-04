@@ -176,24 +176,53 @@ def chat_ask(
 
                     if cooldown_until and cooldown_until > now:
                         cooldown_left = int((cooldown_until - now).total_seconds())
+                        plan_value = user_plan or "free"
+                        reset_at_out = (window_end_at or now).isoformat()
+                        limits_payload = {
+                            "plan": plan_value,
+                            "remaining_today": 0,
+                            "reset_at": reset_at_out,
+                        }
+                        if plan_value == "free":
+                            limits_payload["upsell"] = {
+                                "type": "pro",
+                                "title": "💎 Pro-доступ",
+                                "text": "С Pro вы можете задавать вопросы без дневных лимитов",
+                                "cta": "Оформить Pro",
+                            }
                         cur.execute(
                             "update request_dedup "
                             "set status = 'failed', error_text = 'rate_limited', finished_at = now() "
                             "where request_id = %s",
                             (x_request_id,),
                         )
-                        reset_at_out = window_end_at.isoformat() if window_end_at else None
                         return JSONResponse(
                             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                             content={
+                                "ok": False,
+                                "status": status.HTTP_429_TOO_MANY_REQUESTS,
                                 "error": "rate_limited",
                                 "cooldown_sec": max(cooldown_left, 0),
-                                "reset_at": reset_at_out,
+                                "limits": limits_payload,
                             },
                         )
 
                     if count >= daily_limit:
                         cooldown_until = now + timedelta(seconds=cooldown_sec_default)
+                        plan_value = user_plan or "free"
+                        reset_at_out = (window_end_at or now).isoformat()
+                        limits_payload = {
+                            "plan": plan_value,
+                            "remaining_today": 0,
+                            "reset_at": reset_at_out,
+                        }
+                        if plan_value == "free":
+                            limits_payload["upsell"] = {
+                                "type": "pro",
+                                "title": "💎 Pro-доступ",
+                                "text": "С Pro вы можете задавать вопросы без дневных лимитов",
+                                "cta": "Оформить Pro",
+                            }
                         cur.execute(
                             "update rate_limits "
                             "set cooldown_until = %s, last_request_at = %s "
@@ -202,17 +231,18 @@ def chat_ask(
                         )
                         cur.execute(
                             "update request_dedup "
-                            "set status = 'failed', error_text = 'rate_limited', finished_at = now() "
+                            "set status = 'failed', error_text = 'daily_limit_exceeded', finished_at = now() "
                             "where request_id = %s",
                             (x_request_id,),
                         )
-                        reset_at_out = window_end_at.isoformat() if window_end_at else None
                         return JSONResponse(
                             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                             content={
-                                "error": "rate_limited",
+                                "ok": False,
+                                "status": status.HTTP_429_TOO_MANY_REQUESTS,
+                                "error": "daily_limit_exceeded",
                                 "cooldown_sec": cooldown_sec_default,
-                                "reset_at": reset_at_out,
+                                "limits": limits_payload,
                             },
                         )
 
