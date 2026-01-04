@@ -101,6 +101,7 @@ POST /v1/chat/ask
 ```
 docs/API.md
 ```
+Подробности по запуску backend: см. `README_backend.md`.
 
 ---
 

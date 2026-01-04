@@ -94,8 +94,6 @@ curl -H "Authorization: Bearer $env:BOT_BACKEND_TOKEN" http://127.0.0.1:8000/v1/
 - `X-Request-Id: UUID` (idempotency)
 ---
 
----
-
 ## Режимы и session_context (v1)
 
 Backend поддерживает режимы диалога (`mode`), которые влияют **только** на system-prompt LLM:
