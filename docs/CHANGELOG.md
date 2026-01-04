@@ -174,3 +174,29 @@ python main.py
 - Довести до лимита → бот показывает сообщение о превышении.
 - Остановить backend → бот показывает сообщение о недоступности.
 - Проверить “сырой JSON” `/v1/chat/ask` → `reset_at` строкой ISO8601.
+
+## 2026-01-05  
+### Backend + Telegram-бот — upsell при 429 и smoke бота
+
+#### Backend
+- При `HTTP 429` добавлен upsell для Free-пользователей:
+  - `limits.upsell { type, title, text, cta }`.
+- Гарантировано наличие `limits.reset_at` при любом 429
+  (daily limit + cooldown).
+- В ответ 429 добавлено поле `cooldown_sec` (из `COOLDOWN_SEC`).
+
+#### Telegram-бот
+- При 429 добавлена кнопка **«Оформить Pro»** (по данным backend).
+- Реализован callback `upsell_pro` (заглушка).
+- Строка `Сброс: reset_at` намеренно не отображается в UX.
+- Happy-path и логика лимитов не изменены.
+
+#### Документация / smoke
+- Подготовлен блок smoke-проверки Telegram-бота
+  (happy-path, 429 + upsell, backend down).
+- Блок оформлен в `DEV_SMOKE_WITH_BOT.md` для копипаста в `DEV_SMOKE.md`.
+
+Проверка:
+- Довести Free до лимита → сообщение + кнопка upsell.
+- Нажать кнопку → ответ-заглушка.
+- Проверить JSON 429 → `limits.reset_at` присутствует.
