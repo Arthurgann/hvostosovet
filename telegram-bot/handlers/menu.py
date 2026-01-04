@@ -15,7 +15,7 @@ def setup_menu_handlers(app: Client):
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🚑 Скорая помощь", callback_data=f"{pet_type}_emergency")],
                 [InlineKeyboardButton("🍖 Питание и уход", callback_data=f"{pet_type}_care")],
-                [InlineKeyboardButton("💉 Прививки, профилактика, гигиена", callback_data=f"{pet_type}_health")],
+                [InlineKeyboardButton("💉 Прививки и профилактика", callback_data=f"{pet_type}_vaccines")],
                 [InlineKeyboardButton("🏠 В главное меню", callback_data="back_to_main")]
             ])
         )

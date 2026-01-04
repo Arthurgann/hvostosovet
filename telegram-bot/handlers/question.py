@@ -62,15 +62,30 @@ def _post_chat_ask(
     return status_code, body
 
 
+VALID_MODES = {"emergency", "care", "vaccines"}
+
+
+
+def normalize_mode(value: str | None) -> str:
+    if not value:
+        return "emergency"
+    normalized = value.strip().lower()
+    if normalized == "health":
+        normalized = "vaccines"
+    if normalized not in VALID_MODES:
+        return "emergency"
+    return normalized
+
+
 def setup_question_handlers(app: Client):
-    @app.on_callback_query(filters.regex("^(dog|cat|other)_(emergency|care|health)$"))
+    @app.on_callback_query(filters.regex("^(dog|cat|other)_(emergency|care|vaccines|health)$"))
     async def start_unified_form(client_tg: Client, callback_query: CallbackQuery):
         await callback_query.answer()
         user_id = callback_query.from_user.id
         pet_type, context = callback_query.data.split("_")
 
-        mode_map = {"care": "care", "emergency": "emergency", "health": "vaccines"}
-        current_mode = mode_map.get(context)
+        context = normalize_mode(context)
+        current_mode = context
         start_profile(user_id, pet_type, context, current_mode=current_mode)
 
         if pet_type == "dog":
@@ -87,7 +102,7 @@ def setup_question_handlers(app: Client):
                 "Я помогу вам подобрать рекомендации по кормлению, гигиене, уходу за шерстью, когтями и другим — "
                 "с учётом особенностей вашего любимца.\n\n"
             )
-        elif context == "health":
+        elif context == "vaccines":
             intro = (
                 "🛡 **Регулярные прививки, профилактика и базовая гигиена — важная часть заботы о здоровье питомца.**\n\n"
                 "Я помогу вам разобраться, какие прививки нужны, как ухаживать за зубами и ушами, "
@@ -128,14 +143,16 @@ def setup_question_handlers(app: Client):
             set_basic_info(user_id, message.text)
             profile = get_profile(user_id)
 
-            if profile["context"] == "care":
+            context = normalize_mode(profile.get("context") if profile else None)
+
+            if context == "care":
                 await message.reply(
                     "📝 Напишите свой вопрос или опишите, что вас интересует:\n\n"
                     "Пример: подбор корма, режим кормления, уход за шерстью, когтями, ушами, гигиена, "
                     "выбор мисок, лежанок и других аксессуаров."
                 )
 
-            elif profile["context"] == "health":
+            elif context == "vaccines":
                 await message.reply(
                     "📝 Напишите, о чём вы хотите узнать:\n\n"
                     "Пример: график прививок, профилактика глистов, уход за зубами, обработка от блох и клещей, "
@@ -163,7 +180,7 @@ def setup_question_handlers(app: Client):
             try:
                 if config.BOT_DEBUG:
                     print(f"[HTTP] POST /v1/chat/ask user_id={user_id} bytes={len(summary.encode('utf-8'))}")
-                current_mode = profile.get("current_mode") if profile else None
+                current_mode = normalize_mode(profile.get("current_mode") if profile else None)
                 status_code, body = await asyncio.to_thread(
                     _post_chat_ask, user_id, summary, 25, current_mode
                 )
