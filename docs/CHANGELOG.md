@@ -111,3 +111,26 @@ python main.py
 - В логах backend: `CHAT_PROMPT active_mode=vaccines selected_mode=vaccines`.
 - Поиск `health` в telegram-bot допускается только в legacy-regex и маппинге.
 
+## 2026-01-04
+### Telegram-бот — тонкий клиент
+
+- Вынесен HTTP-вызов backend в `telegram-bot/services/backend_client.py`.
+- Из `handlers/question.py` удалён прямой `urllib` и сетевой код.
+- Бот не содержит OpenAI / LLM-логики, работает только через backend API.
+
+Проверка:
+- Поиск `OpenAI|openai|gpt|chat.completions` → 0 совпадений.
+- Поиск `urllib` → только `backend_client.py`.
+
+---
+
+## 2026-01-04
+### Документация — API и smoke
+
+- Добавлен контракт API: `docs/API.md`.
+- Обновлены `README_telegram-bot.md` и `README_backend.md` (режимы, `session_context v1`).
+- Обновлён `DEV_SMOKE`: добавлены проверки `mode` и сохранения активной сессии.
+
+Проверка:
+- `/v1/chat/ask` с `mode=care`, затем без `mode` → режим сохраняется.
+- В логах backend: `CHAT_PROMPT active_mode=care`.

@@ -150,6 +150,17 @@ def setup_question_handlers(app: Client):
                     answer = (body.get("answer_text") or "").strip()
                     if not answer:
                         raise RuntimeError("empty_answer")
+                    limits = body.get("limits") if isinstance(body, dict) else None
+                    limits_line = None
+                    if isinstance(limits, dict):
+                        plan = limits.get("plan")
+                        if plan == "free":
+                            remaining_today = limits.get("remaining_today")
+                            limits_line = f"🆓 План: Free · Осталось сегодня: {remaining_today}"
+                        elif plan == "pro":
+                            limits_line = "💎 План: Pro"
+                    if limits_line:
+                        answer = f"{answer}\n\n{limits_line}"
                     await message.reply(f"🧠 Ответ:\n\n{answer}")
                 elif status_code == 429:
                     cooldown_sec = body.get("cooldown_sec")

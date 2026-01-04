@@ -116,9 +116,14 @@ def chat_ask(
 
             telegram_user_id = payload.user.telegram_user_id
             user_id = None
+            user_plan = None
+            limits_remaining_today = -1
+            limits_reset_at = None
+            window_end_at = None
+            count = None
             if telegram_user_id is not None:
                 cur.execute(
-                    "select id from users where telegram_user_id = %s",
+                    "select id, plan from users where telegram_user_id = %s",
                     (telegram_user_id,),
                 )
                 user_row = cur.fetchone()
@@ -132,12 +137,13 @@ def chat_ask(
                         (telegram_user_id,),
                     )
                     cur.execute(
-                        "select id from users where telegram_user_id = %s",
+                        "select id, plan from users where telegram_user_id = %s",
                         (telegram_user_id,),
                     )
                     user_row = cur.fetchone()
                 if user_row:
                     user_id = user_row[0]
+                    user_plan = user_row[1]
                     cur.execute(
                         "update request_dedup set user_id = %s where request_id = %s and user_id is null",
                         (user_id, x_request_id),
@@ -217,6 +223,9 @@ def chat_ask(
                         "where user_id = %s",
                         (window_start_at, window_end_at, count + 1, now, user_id),
                     )
+                    limits_reset_at = window_end_at.isoformat() if window_end_at else None
+                    if daily_limit is not None and count is not None:
+                        limits_remaining_today = max(daily_limit - (count + 1), 0)
 
             session_prefix = ""
             session_context = None
@@ -342,7 +351,11 @@ def chat_ask(
                 "should_go_to_vet": False,
                 "followup_question": None,
                 "session": {"session_id": None, "expires_at": None},
-                "limits": {"remaining_in_window": 0, "cooldown_sec": 0},
+                "limits": {
+                    "plan": user_plan or "free",
+                    "remaining_today": limits_remaining_today,
+                    "reset_at": limits_reset_at,
+                },
                 "upsell": {"show": False, "reason": None, "cta": None},
                 "research": {"used_this_period": 0, "limit": 0, "reset_at": None},
             }
