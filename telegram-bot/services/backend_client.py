@@ -40,7 +40,12 @@ def ask_backend(
         status_code = exc.code
         raw = exc.read()
     except URLError as exc:
-        raise RuntimeError("backend_unreachable") from exc
+        return {
+            "ok": False,
+            "status": 0,
+            "error": "backend_unreachable",
+            "limits": None,
+        }
 
     body = {}
     if raw:
@@ -48,4 +53,21 @@ def ask_backend(
             body = json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError:
             body = {}
-    return {"status_code": status_code, "body": body}
+
+    if status_code == 200:
+        return {"ok": True, "data": body}
+
+    error = "unknown_error"
+    limits = None
+    if isinstance(body, dict):
+        limits = body.get("limits")
+        error = body.get("error") or body or "unknown_error"
+    elif body:
+        error = body
+
+    return {
+        "ok": False,
+        "status": status_code,
+        "error": error,
+        "limits": limits,
+    }

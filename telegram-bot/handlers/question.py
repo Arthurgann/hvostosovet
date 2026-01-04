@@ -141,12 +141,13 @@ def setup_question_handlers(app: Client):
                 result = await asyncio.to_thread(
                     ask_backend, base_url, token, user_id, summary, current_mode, request_id
                 )
-                status_code = result.get("status_code")
-                body = result.get("body")
+                ok = result.get("ok")
+                status = result.get("status")
+                body = result.get("data") if ok else result.get("error")
                 body_keys = ",".join(sorted(body.keys())) if isinstance(body, dict) else ""
                 if config.BOT_DEBUG:
-                    print(f"[HTTP] status={status_code} user_id={user_id} body_keys={body_keys}")
-                if status_code == 200:
+                    print(f"[HTTP] status={status} user_id={user_id} ok={ok} body_keys={body_keys}")
+                if ok:
                     answer = (body.get("answer_text") or "").strip()
                     if not answer:
                         raise RuntimeError("empty_answer")
@@ -162,18 +163,25 @@ def setup_question_handlers(app: Client):
                     if limits_line:
                         answer = f"{answer}\n\n{limits_line}"
                     await message.reply(f"🧠 Ответ:\n\n{answer}")
-                elif status_code == 429:
-                    cooldown_sec = body.get("cooldown_sec")
-                    if isinstance(cooldown_sec, int):
-                        await message.reply(f"⚠️ Лимит, подождите {cooldown_sec} сек.")
-                    else:
-                        await message.reply("⚠️ Лимит, подождите немного.")
-                elif status_code == 402:
-                    await message.reply("⚠️ Нужен Pro.")
-                elif status_code in (401, 403):
-                    await message.reply("⚠️ Ошибка авторизации.")
+                elif status == 0 or body == "backend_unreachable":
+                    await message.reply("⚠️ Сервер сейчас недоступен. Попробуйте через пару минут.")
+                elif status == 429:
+                    reset_at = None
+                    limits = result.get("limits")
+                    if isinstance(body, dict):
+                        reset_at = body.get("reset_at")
+                    if reset_at is None and isinstance(limits, dict):
+                        reset_at = limits.get("reset_at")
+                    message_text = "🆓 Лимит Free на сегодня исчерпан. Приходите завтра."
+                    if reset_at:
+                        message_text = f"{message_text}\nСброс: {reset_at}"
+                    await message.reply(message_text)
+                elif status in (401, 403):
+                    await message.reply("Ошибка авторизации между ботом и сервером (BOT_BACKEND_TOKEN).")
+                elif isinstance(status, int) and status >= 500:
+                    await message.reply("Сервис временно недоступен. Попробуйте позже.")
                 else:
-                    await message.reply("⚠️ Ошибка, попробуйте позже.")
+                    await message.reply("Не удалось обработать запрос. Попробуйте позже.")
 
             except Exception as e:
                 if config.BOT_DEBUG:
