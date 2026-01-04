@@ -17,13 +17,20 @@ from services.state import (
 )
 
 
-def _post_chat_ask(telegram_user_id: int, text: str, timeout_sec: int = 25) -> tuple[int, dict]:
+def _post_chat_ask(
+    telegram_user_id: int,
+    text: str,
+    timeout_sec: int = 25,
+    mode: str | None = None,
+) -> tuple[int, dict]:
     base_url = os.getenv("BACKEND_BASE_URL", "").strip().rstrip("/")
     token = os.getenv("BOT_BACKEND_TOKEN", "").strip()
     if not base_url or not token:
         raise RuntimeError("missing_backend_config")
 
     payload = {"user": {"telegram_user_id": telegram_user_id}, "text": text}
+    if mode:
+        payload["mode"] = mode
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(
         f"{base_url}/v1/chat/ask",
@@ -62,7 +69,9 @@ def setup_question_handlers(app: Client):
         user_id = callback_query.from_user.id
         pet_type, context = callback_query.data.split("_")
 
-        start_profile(user_id, pet_type, context)
+        mode_map = {"care": "care", "emergency": "emergency", "health": "vaccines"}
+        current_mode = mode_map.get(context)
+        start_profile(user_id, pet_type, context, current_mode=current_mode)
 
         if pet_type == "dog":
             example = "Такса, 3 года, девочка, живёт в квартире, гуляет 2 раза в день, склонна к полноте."
@@ -154,8 +163,9 @@ def setup_question_handlers(app: Client):
             try:
                 if config.BOT_DEBUG:
                     print(f"[HTTP] POST /v1/chat/ask user_id={user_id} bytes={len(summary.encode('utf-8'))}")
+                current_mode = profile.get("current_mode") if profile else None
                 status_code, body = await asyncio.to_thread(
-                    _post_chat_ask, user_id, summary, 25
+                    _post_chat_ask, user_id, summary, 25, current_mode
                 )
                 body_keys = ",".join(sorted(body.keys())) if isinstance(body, dict) else ""
                 if config.BOT_DEBUG:

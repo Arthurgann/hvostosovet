@@ -5,8 +5,15 @@ _user_profiles = defaultdict(dict)
 def get_profile(user_id: int) -> dict | None:
     return _user_profiles.get(user_id)
 
-def start_profile(user_id: int, pet_type: str = "unknown", context: str = "unknown") -> dict:
+def start_profile(
+    user_id: int,
+    pet_type: str = "unknown",
+    context: str = "unknown",
+    current_mode: str | None = None,
+) -> dict:
     _user_profiles[user_id] = {"type": pet_type, "context": context, "step": "basic_info"}
+    if current_mode:
+        _user_profiles[user_id]["current_mode"] = current_mode
     return _user_profiles[user_id]
 
 def set_basic_info(user_id: int, text: str) -> None:
