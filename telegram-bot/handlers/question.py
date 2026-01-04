@@ -2,12 +2,10 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery
 from pyrogram.enums import ChatAction
 import asyncio
-import json
 import os
 import uuid
-from urllib import request
-from urllib.error import HTTPError, URLError
 import config
+from services.backend_client import ask_backend
 from services.state import (
     get_profile,
     start_profile,
@@ -16,50 +14,6 @@ from services.state import (
     set_waiting_question,
 )
 
-
-def _post_chat_ask(
-    telegram_user_id: int,
-    text: str,
-    timeout_sec: int = 25,
-    mode: str | None = None,
-) -> tuple[int, dict]:
-    base_url = os.getenv("BACKEND_BASE_URL", "").strip().rstrip("/")
-    token = os.getenv("BOT_BACKEND_TOKEN", "").strip()
-    if not base_url or not token:
-        raise RuntimeError("missing_backend_config")
-
-    payload = {"user": {"telegram_user_id": telegram_user_id}, "text": text}
-    if mode:
-        payload["mode"] = mode
-    data = json.dumps(payload).encode("utf-8")
-    req = request.Request(
-        f"{base_url}/v1/chat/ask",
-        data=data,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "X-Request-Id": str(uuid.uuid4()),
-            "Content-Type": "application/json",
-        },
-    )
-
-    try:
-        with request.urlopen(req, timeout=timeout_sec) as resp:
-            status_code = resp.getcode()
-            raw = resp.read()
-    except HTTPError as exc:
-        status_code = exc.code
-        raw = exc.read()
-    except URLError as exc:
-        raise RuntimeError("backend_unreachable") from exc
-
-    body = {}
-    if raw:
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
-            body = {}
-    return status_code, body
 
 
 VALID_MODES = {"emergency", "care", "vaccines"}
@@ -181,9 +135,14 @@ def setup_question_handlers(app: Client):
                 if config.BOT_DEBUG:
                     print(f"[HTTP] POST /v1/chat/ask user_id={user_id} bytes={len(summary.encode('utf-8'))}")
                 current_mode = normalize_mode(profile.get("current_mode") if profile else None)
-                status_code, body = await asyncio.to_thread(
-                    _post_chat_ask, user_id, summary, 25, current_mode
+                base_url = os.getenv("BACKEND_BASE_URL", "")
+                token = os.getenv("BOT_BACKEND_TOKEN", "")
+                request_id = str(uuid.uuid4())
+                result = await asyncio.to_thread(
+                    ask_backend, base_url, token, user_id, summary, current_mode, request_id
                 )
+                status_code = result.get("status_code")
+                body = result.get("body")
                 body_keys = ",".join(sorted(body.keys())) if isinstance(body, dict) else ""
                 if config.BOT_DEBUG:
                     print(f"[HTTP] status={status_code} user_id={user_id} body_keys={body_keys}")
