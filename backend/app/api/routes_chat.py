@@ -14,8 +14,10 @@ from app.core.auth import require_bot_token
 from app.core.db import get_connection
 from app.services import LlmTimeoutError, ask_llm
 from app.services.sessions import (
+    DEFAULT_MODE,
     build_context_prefix,
     get_active_session,
+    normalize_session_context,
     upsert_session_turn,
 )
 
@@ -30,6 +32,7 @@ class ChatAskUser(BaseModel):
 class ChatAskPayload(BaseModel):
     user: ChatAskUser
     text: str | None = None
+    mode: str | None = None
 
 
 @router.post("/chat/ask", dependencies=[Depends(require_bot_token)])
@@ -216,12 +219,30 @@ def chat_ask(
                     )
 
             session_prefix = ""
+            session_context = None
+            active_session_id = None
+            active_mode = DEFAULT_MODE
             if user_id:
                 active_session = get_active_session(cur, user_id)
                 if active_session:
-                    session_prefix = build_context_prefix(
-                        active_session.get("session_context")
+                    active_session_id = active_session.get("id")
+                    session_context = normalize_session_context(
+                        active_session.get("session_context"), now
                     )
+                else:
+                    session_context = normalize_session_context({}, now)
+
+                requested_mode = None
+                if payload.mode and payload.mode.strip():
+                    requested_mode = payload.mode.strip().lower()
+                if requested_mode:
+                    session_context["active"]["mode"] = requested_mode
+                    session_context["active"]["updated_at"] = now.isoformat()
+                    active_mode = requested_mode
+                else:
+                    active_mode = session_context.get("active", {}).get("mode") or DEFAULT_MODE
+
+                session_prefix = build_context_prefix(session_context, active_mode)
 
             original_text = payload.text
             final_user_text = original_text
@@ -286,7 +307,14 @@ def chat_ask(
 
             if user_id:
                 try:
-                    upsert_session_turn(cur, user_id, payload.text, answer_text)
+                    upsert_session_turn(
+                        cur,
+                        user_id,
+                        payload.text,
+                        answer_text,
+                        session_context=session_context,
+                        active_session_id=active_session_id,
+                    )
                 except Exception:
                     logger.exception(
                         "Failed to update session request_id=%s user_id=%s",
