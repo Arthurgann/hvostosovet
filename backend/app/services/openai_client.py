@@ -11,6 +11,7 @@ class LlmTimeoutError(Exception):
 
 def call_chat_completions(
     prompt_text: str,
+    system_prompt: str,
     model: str,
     temperature: float,
     max_tokens: int,
@@ -23,7 +24,7 @@ def call_chat_completions(
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": "You are a helpful veterinary assistant."},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt_text},
         ],
         "temperature": temperature,

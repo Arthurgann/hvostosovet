@@ -20,9 +20,10 @@ from app.services.sessions import (
     normalize_session_context,
     upsert_session_turn,
 )
+from app.services.prompts import PROMPTS_BY_MODE
 
 router = APIRouter()
-logger = logging.getLogger("hvostosovet")
+logger = logging.getLogger("uvicorn.error")
 
 
 class ChatAskUser(BaseModel):
@@ -33,7 +34,6 @@ class ChatAskPayload(BaseModel):
     user: ChatAskUser
     text: str | None = None
     mode: str | None = None
-
 
 @router.post("/chat/ask", dependencies=[Depends(require_bot_token)])
 def chat_ask(
@@ -243,11 +243,24 @@ def chat_ask(
                     active_mode = session_context.get("active", {}).get("mode") or DEFAULT_MODE
 
                 session_prefix = build_context_prefix(session_context, active_mode)
+            elif payload.mode and payload.mode.strip():
+                active_mode = payload.mode.strip().lower()
 
             original_text = payload.text
             final_user_text = original_text
             if session_prefix:
                 final_user_text = f"{session_prefix}\n\nТекущий вопрос: {original_text}"
+            selected_mode = (
+                active_mode if active_mode in PROMPTS_BY_MODE else DEFAULT_MODE
+            )
+            system_prompt = PROMPTS_BY_MODE.get(
+                active_mode, PROMPTS_BY_MODE["emergency"]
+            )
+            logger.info(
+                "CHAT_PROMPT active_mode=%s selected_mode=%s",
+                active_mode,
+                selected_mode,
+            )
 
             policy = "free_default"
             policies = {
@@ -273,7 +286,7 @@ def chat_ask(
             llm_params = policies[policy]
 
             try:
-                answer_text = ask_llm(final_user_text)
+                answer_text = ask_llm(final_user_text, system_prompt)
             except LlmTimeoutError:
                 cur.execute(
                     "update request_dedup "
