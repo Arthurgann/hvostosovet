@@ -94,6 +94,30 @@ curl -H "Authorization: Bearer $env:BOT_BACKEND_TOKEN" http://127.0.0.1:8000/v1/
 - `X-Request-Id: UUID` (idempotency)
 ---
 
+---
+
+## Режимы и session_context (v1)
+
+Backend поддерживает режимы диалога (`mode`), которые влияют **только** на system-prompt LLM:
+
+- `emergency` — экстренные ситуации  
+- `care` — уход и содержание  
+- `vaccines` — прививки и профилактика  
+
+Режим может быть передан клиентом в `POST /v1/chat/ask` опционально.
+Если `mode` не передан — используется текущий `session_context.active.mode`.
+
+Контекст диалога хранится в таблице `sessions` в формате `session_context v1`:
+
+- `active: { mode, updated_at }`
+- `turns: [{ t, mode, q, a }, ...]`
+- `summary` — заготовка, пока не используется
+
+⚠️ Принято архитектурное решение:  
+**контекст диалога единый** — при формировании prompt используются последние `SESSION_MAX_TURNS` пар `q/a` **по всем режимам**, без фильтрации по `mode`.
+
+```
+
 ### POST /v1/chat/ask (Windows PowerShell)
 Рекомендуется Invoke-RestMethod (curl.exe часто ломает JSON):
 
@@ -116,5 +140,4 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/chat/ask" -Headers
 - При `llm_failed` пишется traceback в logs, а причина сохраняется в `request_dedup.error_text`
 - Telegram-бот использует backend `/v1/chat/ask` вместо прямого вызова OpenAI
 - LLM слой вынесен в app/services (llm.py + openai_client.py), routes_chat.py только роутер.
-- TTL-сессии: краткая память диалога хранится в таблице `sessions` (jsonb `session_context.turns[{q,a}]`), управляется `SESSION_TTL_MIN` и `SESSION_MAX_TURNS`.
-
+- TTL-сессии: память диалога хранится в `sessions.session_context (v1)` и включает `active.mode` и `turns[{t, mode, q, a}]`; TTL и размер хвоста управляются `SESSION_TTL_MIN` и `SESSION_MAX_TURNS`.
