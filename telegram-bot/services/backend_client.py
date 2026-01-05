@@ -10,6 +10,7 @@ def ask_backend(
     text: str,
     mode: str | None,
     request_id: str,
+    profile: dict | None = None,
 ) -> dict:
     if not base_url or not token:
         raise RuntimeError("missing_backend_config")
@@ -20,6 +21,8 @@ def ask_backend(
     payload = {"user": {"telegram_user_id": telegram_user_id}, "text": text}
     if mode is not None:
         payload["mode"] = mode
+    if profile:
+        payload["profile"] = profile
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(
         f"{base_url}/v1/chat/ask",
