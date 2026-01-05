@@ -4,7 +4,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 def setup_start_handlers(app: Client):
 
-    @app.on_message(filters.command("start"))
+    @app.on_message(filters.command(["start", "menu"]))
     async def start_handler(client: Client, message: Message):
         await message.reply_text(
             "Привет! 🐾 Я — ХвостоСовет, твой помощник по заботе о питомце.\n\nВыберите, кто ваш питомец:",
