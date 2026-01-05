@@ -12,6 +12,9 @@ from services.state import (
     set_basic_info,
     set_question,
     set_waiting_question,
+    set_pending_question,
+    get_pending_question,
+    pop_pending_question,
 )
 
 
@@ -29,6 +32,99 @@ def normalize_mode(value: str | None) -> str:
     if normalized not in VALID_MODES:
         return "emergency"
     return normalized
+
+
+def build_pet_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🐶 Собака", callback_data="pet_dog")],
+            [InlineKeyboardButton("🐱 Кошка", callback_data="pet_cat")],
+            [InlineKeyboardButton("🐾 Другое", callback_data="pet_other")],
+        ]
+    )
+
+
+async def send_backend_response(client_tg: Client, message: Message, user_id: int) -> None:
+    profile = get_profile(user_id)
+    if not profile:
+        return
+
+    summary = f"""📋 Анкета:
+Тип питомца: {profile['type']}
+Описание: {profile['basic_info']}
+Вопрос: {profile['question']}"""
+
+    await message.reply("⌛️ Ваш запрос обрабатывается нейросетью. Пожалуйста, подождите...")
+
+    await client_tg.send_chat_action(message.chat.id, ChatAction.TYPING)
+
+    try:
+        if config.BOT_DEBUG:
+            print(f"[HTTP] POST /v1/chat/ask user_id={user_id} bytes={len(summary.encode('utf-8'))}")
+        current_mode = normalize_mode(profile.get("current_mode") if profile else None)
+        base_url = os.getenv("BACKEND_BASE_URL", "")
+        token = os.getenv("BOT_BACKEND_TOKEN", "")
+        request_id = str(uuid.uuid4())
+        result = await asyncio.to_thread(
+            ask_backend, base_url, token, user_id, summary, current_mode, request_id
+        )
+        ok = result.get("ok")
+        status = result.get("status")
+        body = result.get("data") if ok else result.get("error")
+        body_keys = ",".join(sorted(body.keys())) if isinstance(body, dict) else ""
+        if config.BOT_DEBUG:
+            print(f"[HTTP] status={status} user_id={user_id} ok={ok} body_keys={body_keys}")
+        if ok:
+            answer = (body.get("answer_text") or "").strip()
+            if not answer:
+                raise RuntimeError("empty_answer")
+            limits = body.get("limits") if isinstance(body, dict) else None
+            limits_line = None
+            if isinstance(limits, dict):
+                plan = limits.get("plan")
+                if plan == "free":
+                    remaining_today = limits.get("remaining_today")
+                    limits_line = f"🆓 План: Free · Осталось сегодня: {remaining_today}"
+                elif plan == "pro":
+                    limits_line = "💎 План: Pro"
+            if limits_line:
+                answer = f"{answer}\n\n{limits_line}"
+            await message.reply(f"🧠 Ответ:\n\n{answer}")
+        elif status == 0 or body == "backend_unreachable":
+            await message.reply("⚠️ Сервер сейчас недоступен. Попробуйте через пару минут.")
+        elif status == 429:
+            reset_at = None
+            limits = result.get("limits")
+            upsell = None
+            if isinstance(body, dict):
+                reset_at = body.get("reset_at")
+                limits = body.get("limits") or limits
+            if isinstance(limits, dict):
+                reset_at = reset_at or limits.get("reset_at")
+                upsell = limits.get("upsell")
+            message_text = "🆓 Лимит Free на сегодня исчерпан. Приходите завтра."
+            reply_markup = None
+            if isinstance(upsell, dict):
+                cta = (upsell.get("cta") or "Оформить Pro").strip()
+                reply_markup = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(cta, callback_data="upsell_pro")]]
+                )
+            await message.reply(message_text, reply_markup=reply_markup)
+        elif status in (401, 403):
+            await message.reply("Ошибка авторизации между ботом и сервером (BOT_BACKEND_TOKEN).")
+        elif isinstance(status, int) and status >= 500:
+            await message.reply("Сервис временно недоступен. Попробуйте позже.")
+        else:
+            await message.reply("Не удалось обработать запрос. Попробуйте позже.")
+
+    except Exception as e:
+        if config.BOT_DEBUG:
+            print(f"[HTTP] error user_id={user_id} err={e}")
+        print(f"[question] Backend error for user_id={user_id}: {e}")
+        await message.reply("⚠️ Ошибка, попробуйте позже.")
+
+    finally:
+        set_waiting_question(user_id)
 
 
 def setup_question_handlers(app: Client):
@@ -84,7 +180,21 @@ def setup_question_handlers(app: Client):
 
         if not profile:
             start_profile(user_id)
+            set_pending_question(user_id, message.text)
             profile = get_profile(user_id)
+            if profile:
+                profile["step"] = "pending_details"
+            await message.reply(
+                "📥 Ваш вопрос принят.\n\n"
+                "Напоминаю, что на Free-тарифе я не запоминаю данные ваших питомцев. "
+                "Для точного ответа нейросети важно знать детали: вид, породу, возраст, пол, "
+                "особенности здоровья, прививки и т.д.\n\n"
+                "📝 Напишите ниже любые важные детали, которые вы не указали ранее, "
+                "одним сообщением — я добавлю их к вашему вопросу.\n\n"
+                "Или воспользуйтесь кнопками, чтобы заполнить данные по шагам:",
+                reply_markup=build_pet_keyboard(),
+            )
+            return
 
         if config.BOT_DEBUG:
             print(f"[Q-HANDLER] user_id={user_id} has_profile={bool(profile)} step={profile.get('step') if profile else None}")
@@ -101,6 +211,11 @@ def setup_question_handlers(app: Client):
         if step == "basic_info":
             set_basic_info(user_id, message.text)
             profile = get_profile(user_id)
+            pending = get_pending_question(user_id)
+            if pending:
+                set_question(user_id, pop_pending_question(user_id))
+                await send_backend_response(client_tg, message, user_id)
+                return
 
             context = normalize_mode(profile.get("context") if profile else None)
 
@@ -123,83 +238,17 @@ def setup_question_handlers(app: Client):
                     "💬 Опишите, что именно беспокоит Вашего питомца, или задайте вопрос:"
                 )
 
+        elif step == "pending_details":
+            set_basic_info(user_id, message.text)
+            pending = pop_pending_question(user_id)
+            if not pending:
+                await message.reply(
+                    "💬 Опишите, что именно беспокоит Вашего питомца, или задайте вопрос:"
+                )
+                return
+            set_question(user_id, pending)
+            await send_backend_response(client_tg, message, user_id)
+
         elif step == "question":
             set_question(user_id, message.text)
-            profile = get_profile(user_id)
-
-            summary = f"""📋 Анкета:
-Тип питомца: {profile['type']}
-Описание: {profile['basic_info']}
-Вопрос: {profile['question']}"""
-
-            await message.reply("⌛ Ваш запрос обрабатывается нейросетью. Пожалуйста, подождите...")
-
-            await client_tg.send_chat_action(message.chat.id, ChatAction.TYPING)
-
-            try:
-                if config.BOT_DEBUG:
-                    print(f"[HTTP] POST /v1/chat/ask user_id={user_id} bytes={len(summary.encode('utf-8'))}")
-                current_mode = normalize_mode(profile.get("current_mode") if profile else None)
-                base_url = os.getenv("BACKEND_BASE_URL", "")
-                token = os.getenv("BOT_BACKEND_TOKEN", "")
-                request_id = str(uuid.uuid4())
-                result = await asyncio.to_thread(
-                    ask_backend, base_url, token, user_id, summary, current_mode, request_id
-                )
-                ok = result.get("ok")
-                status = result.get("status")
-                body = result.get("data") if ok else result.get("error")
-                body_keys = ",".join(sorted(body.keys())) if isinstance(body, dict) else ""
-                if config.BOT_DEBUG:
-                    print(f"[HTTP] status={status} user_id={user_id} ok={ok} body_keys={body_keys}")
-                if ok:
-                    answer = (body.get("answer_text") or "").strip()
-                    if not answer:
-                        raise RuntimeError("empty_answer")
-                    limits = body.get("limits") if isinstance(body, dict) else None
-                    limits_line = None
-                    if isinstance(limits, dict):
-                        plan = limits.get("plan")
-                        if plan == "free":
-                            remaining_today = limits.get("remaining_today")
-                            limits_line = f"🆓 План: Free · Осталось сегодня: {remaining_today}"
-                        elif plan == "pro":
-                            limits_line = "💎 План: Pro"
-                    if limits_line:
-                        answer = f"{answer}\n\n{limits_line}"
-                    await message.reply(f"🧠 Ответ:\n\n{answer}")
-                elif status == 0 or body == "backend_unreachable":
-                    await message.reply("⚠️ Сервер сейчас недоступен. Попробуйте через пару минут.")
-                elif status == 429:
-                    reset_at = None
-                    limits = result.get("limits")
-                    upsell = None
-                    if isinstance(body, dict):
-                        reset_at = body.get("reset_at")
-                        limits = body.get("limits") or limits
-                    if isinstance(limits, dict):
-                        reset_at = reset_at or limits.get("reset_at")
-                        upsell = limits.get("upsell")
-                    message_text = "🆓 Лимит Free на сегодня исчерпан. Приходите завтра."
-                    reply_markup = None
-                    if isinstance(upsell, dict):
-                        cta = (upsell.get("cta") or "Оформить Pro").strip()
-                        reply_markup = InlineKeyboardMarkup(
-                            [[InlineKeyboardButton(cta, callback_data="upsell_pro")]]
-                        )
-                    await message.reply(message_text, reply_markup=reply_markup)
-                elif status in (401, 403):
-                    await message.reply("Ошибка авторизации между ботом и сервером (BOT_BACKEND_TOKEN).")
-                elif isinstance(status, int) and status >= 500:
-                    await message.reply("Сервис временно недоступен. Попробуйте позже.")
-                else:
-                    await message.reply("Не удалось обработать запрос. Попробуйте позже.")
-
-            except Exception as e:
-                if config.BOT_DEBUG:
-                    print(f"[HTTP] error user_id={user_id} err={e}")
-                print(f"[question] Backend error for user_id={user_id}: {e}")
-                await message.reply("⚠️ Ошибка, попробуйте позже.")
-
-            finally:
-                set_waiting_question(user_id)
+            await send_backend_response(client_tg, message, user_id)
