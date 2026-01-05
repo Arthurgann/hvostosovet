@@ -144,9 +144,9 @@ def build_post_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("✅ Вернуться к вопросу", callback_data="pro_post:continue")],
-            [InlineKeyboardButton("🩺 Особенности (если известно)", callback_data="pro_post:health")],
+            [InlineKeyboardButton("🩺 Особенности здоровья", callback_data="pro_post:health")],
             [InlineKeyboardButton("💉 Прививки/паразиты", callback_data="pro_post:vaccines")],
-            [InlineKeyboardButton("📝 Важно про питомца", callback_data="pro_post:note")],
+            [InlineKeyboardButton("📝 Важное о питомце", callback_data="pro_post:note")],
         ]
     )
 
@@ -201,18 +201,26 @@ def get_pro_prompt_and_keyboard(user_id: int, step: str) -> tuple[str, InlineKey
     if step in (PRO_STEP_DONE, PRO_STEP_POST_MENU):
         pro_profile = get_pro_profile(user_id)
         name = (pro_profile.get("name") or "").strip()
-        title_name = f" ({name})" if name else ""
+        title_name = f" {name}" if name else ""
         if get_profile_created_shown(user_id):
             status_line = f"Профиль питомца{title_name} обновлён ✅"
         else:
-            status_line = f"Профиль питомца{title_name} создан ✅"
-        if name:
-            status_hint = f"Вернуться к вашему вопросу про {name} и получить ответ."
+            status_line = f"Профиль питомца{title_name} успешно создан! 🐾"
+        if get_profile_created_shown(user_id):
+            status_hint = (
+                "Спасибо, эта информация поможет мне отвечать точнее.\n\n"
+                "Вы можете продолжить заполнять профиль\n"
+                "или вернуться к своему вопросу в любой момент."
+            )
         else:
-            status_hint = "Вернуться к вашему вопросу и получить ответ."
+            status_hint = (
+                "Я запомнил базовую информацию.\n"
+                "Теперь могу учитывать её в ответах и рекомендациях.\n\n"
+                "Вы можете вернуться к своему вопросу\n"
+                "или дополнить профиль — это поможет мне отвечать точнее."
+            )
         return (
-            f"{status_line}\n{status_hint}\n"
-            "Хотите добавить ещё немного? Это поможет делать ответы точнее.",
+            f"{status_line}\n{status_hint}\n",
             build_post_menu_keyboard(),
         )
     if step == PRO_STEP_HEALTH_PICK:
