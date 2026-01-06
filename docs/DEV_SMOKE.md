@@ -145,6 +145,29 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/chat/ask" -Headers
 
 Если все пункты выполнены — backend готов.
 
+
+### Переключение Free / Pro для локальных тестов
+
+Источник истины для режима пользователя — поле `users.plan` в Supabase.
+
+Для smoke-тестов достаточно вручную менять `plan`:
+
+- `free` — поведение Free (лимиты, без сохранения pet.profile)
+- `pro` — поведение Pro (долговременная память питомца)
+
+Пример SQL:
+
+```sql
+update users set plan='pro' where telegram_user_id=123456;
+update users set plan='free' where telegram_user_id=123456;
+
+Backend не использует FORCE_PRO.
+FORCE_PRO может применяться только в telegram-bot для UX-тестов.
+
+
+
+
+
 ## 6) Telegram-бот — минимальная проверка клиента
 
 Этот раздел проверяет Telegram-бот как клиент backend API

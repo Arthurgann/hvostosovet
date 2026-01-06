@@ -34,6 +34,77 @@ class ChatAskPayload(BaseModel):
     user: ChatAskUser
     text: str | None = None
     mode: str | None = None
+    pet: dict | None = None
+    pet_profile: dict | None = None
+
+
+def _parse_birth_date(value):
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value).date()
+    except ValueError:
+        return None
+
+
+def get_active_pet(cur, user_id):
+    cur.execute(
+        "select id, user_id, type, name, sex, birth_date, age_text, breed, profile, "
+        "created_at, archived_at, updated_at "
+        "from pets "
+        "where user_id = %s and archived_at is null "
+        "order by created_at desc "
+        "limit 1",
+        (user_id,),
+    )
+    return cur.fetchone()
+
+
+def upsert_active_pet(cur, user_id, pet_dict):
+    pet_type = pet_dict.get("type")
+    name = pet_dict.get("name")
+    sex = pet_dict.get("sex") or "unknown"
+    birth_date = _parse_birth_date(pet_dict.get("birth_date"))
+    age_text = pet_dict.get("age_text")
+    breed = pet_dict.get("breed")
+    profile = Json(pet_dict)
+
+    active_pet = get_active_pet(cur, user_id)
+    if active_pet:
+        pet_id = active_pet[0]
+        cur.execute(
+            "update pets "
+            "set type = %s, name = %s, sex = %s, birth_date = %s, age_text = %s, "
+            "breed = %s, profile = %s, updated_at = now() "
+            "where id = %s",
+            (
+                pet_type,
+                name,
+                sex,
+                birth_date,
+                age_text,
+                breed,
+                profile,
+                pet_id,
+            ),
+        )
+        return
+
+    cur.execute(
+        "insert into pets "
+        "(user_id, type, name, sex, birth_date, age_text, breed, profile, created_at, updated_at) "
+        "values (%s, %s, %s, %s, %s, %s, %s, %s, now(), now())",
+        (
+            user_id,
+            pet_type,
+            name,
+            sex,
+            birth_date,
+            age_text,
+            breed,
+            profile,
+        ),
+    )
 
 @router.post("/chat/ask", dependencies=[Depends(require_bot_token)])
 def chat_ask(
@@ -115,6 +186,11 @@ def chat_ask(
             window_end = window_start + timedelta(days=1)
 
             telegram_user_id = payload.user.telegram_user_id
+            pet_dict = None
+            if payload.pet is not None:
+                pet_dict = payload.pet
+            elif payload.pet_profile is not None:
+                pet_dict = payload.pet_profile
             user_id = None
             user_plan = None
             limits_remaining_today = -1
@@ -148,6 +224,15 @@ def chat_ask(
                         "update request_dedup set user_id = %s where request_id = %s and user_id is null",
                         (user_id, x_request_id),
                     )
+                    if user_plan == "pro" and pet_dict is not None:
+                        try:
+                            upsert_active_pet(cur, user_id, pet_dict)
+                        except Exception:
+                            logger.exception(
+                                "Failed to upsert pet profile request_id=%s user_id=%s",
+                                x_request_id,
+                                user_id,
+                            )
 
                     cur.execute(
                         "select window_start_at, window_end_at, count, cooldown_until "
@@ -416,6 +501,35 @@ def pets_upsert():
         status_code=status.HTTP_402_PAYMENT_REQUIRED,
         content={"error": "pro_required"},
     )
+
+
+@router.get("/pets/active", dependencies=[Depends(require_bot_token)])
+def pets_active(telegram_user_id: int):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select id from users where telegram_user_id = %s",
+                (telegram_user_id,),
+            )
+            user_row = cur.fetchone()
+            if not user_row:
+                return {"ok": True, "pet": None}
+            user_id = user_row[0]
+            pet_row = get_active_pet(cur, user_id)
+            if not pet_row:
+                return {"ok": True, "pet": None}
+            pet = {
+                "id": pet_row[0],
+                "type": pet_row[2],
+                "name": pet_row[3],
+                "sex": pet_row[4],
+                "birth_date": pet_row[5],
+                "age_text": pet_row[6],
+                "breed": pet_row[7],
+                "profile": pet_row[8],
+                "updated_at": pet_row[11],
+            }
+            return {"ok": True, "pet": pet}
 
 
 @router.get("/history", dependencies=[Depends(require_bot_token)])
