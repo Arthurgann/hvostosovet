@@ -111,6 +111,7 @@ def reset_pro_profile(user_id: int) -> None:
     p.pop("awaiting_button", None)
     p.pop("pro_temp", None)
     p.pop("pro_profile_created_shown", None)
+    p.pop("last_limits", None)
 
 
 def add_health_tag(user_id: int, tag: str) -> None:
