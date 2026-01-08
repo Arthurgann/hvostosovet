@@ -27,6 +27,8 @@ from services.state import (
     set_question,
     set_waiting_question,
     start_profile,
+    get_skip_basic_info,
+    set_skip_basic_info,
     get_pending_question,
     pop_pending_question,
 )
@@ -210,6 +212,27 @@ def setup_question_handlers(app: Client):
         current_mode = context
         start_profile(user_id, pet_type, context, current_mode=current_mode)
         set_profile_field(user_id, "type", pet_type)
+
+        if get_skip_basic_info(user_id):
+            set_skip_basic_info(user_id, False)
+            set_waiting_question(user_id)
+            if context == "care":
+                await callback_query.message.edit_text(
+                    "💬 Напишите свой вопрос или опишите, что вас интересует:\n\n"
+                    "Пример: подбор корма, режим кормления, уход за шерстью, когтями, ушами, гигиена, "
+                    "выбор мисок, лежанок и других аксессуаров."
+                )
+            elif context == "vaccines":
+                await callback_query.message.edit_text(
+                    "💬 Напишите, о чём вы хотите узнать:\n\n"
+                    "Пример: график прививок, профилактика глистов, уход за зубами, обработка от блох и клещей, "
+                    "стрижка когтей, чистка ушей, обработка глаз."
+                )
+            else:
+                await callback_query.message.edit_text(
+                    "💬 Опишите, что именно беспокоит Вашего питомца, или задайте вопрос:"
+                )
+            return
 
         if pet_type == "dog":
             example = "Такса, 3 года, девочка, живёт в квартире, гуляет 2 раза в день, склонна к полноте."

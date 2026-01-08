@@ -56,6 +56,16 @@ def set_pet_profile_loaded(user_id: int, loaded: bool) -> None:
     p["pet_profile_loaded"] = loaded
 
 
+def set_skip_basic_info(user_id: int, value: bool) -> None:
+    p = _user_profiles[user_id]
+    p["skip_basic_info"] = bool(value)
+
+
+def get_skip_basic_info(user_id: int) -> bool:
+    p = _user_profiles.get(user_id) or {}
+    return bool(p.get("skip_basic_info"))
+
+
 def set_profile_field(user_id: int, path: str, value) -> None:
     p = _user_profiles[user_id]
     profile = p.get("profile") or p.get("pet_profile") or {}
@@ -141,6 +151,14 @@ def set_health_note(user_id: int, tag: str, note: str) -> None:
     p["pet_profile"] = profile
 
 
+def set_health_category(user_id: int, category: str | None) -> None:
+    set_pro_temp_field(user_id, "health_category", category)
+
+
+def get_health_category(user_id: int) -> str | None:
+    return get_pro_temp(user_id).get("health_category")
+
+
 def set_owner_note(user_id: int, note: str) -> None:
     set_profile_field(user_id, "owner_note", note)
 
@@ -182,6 +200,7 @@ def start_profile(
         "pet_profile_loaded": existing.get("pet_profile_loaded"),
         "last_limits": existing.get("last_limits"),
         "pro_profile_created_shown": existing.get("pro_profile_created_shown"),
+        "skip_basic_info": existing.get("skip_basic_info"),
     }
     _user_profiles[user_id] = {"type": pet_type, "context": context, "step": "basic_info"}
     if pending_question:

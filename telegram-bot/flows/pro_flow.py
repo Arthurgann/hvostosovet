@@ -13,11 +13,14 @@ from services.state import (
     get_pet_profile_loaded,
     is_awaiting_button,
     set_health_note,
+    set_health_category,
+    get_health_category,
     set_owner_note,
     set_profile_created_shown,
     set_profile_field,
     set_pet_profile,
     set_pet_profile_loaded,
+    set_skip_basic_info,
     set_pro_step,
     set_pro_temp_field,
     add_health_tag,
@@ -119,9 +122,21 @@ def build_post_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("✅ Вернуться к вопросу", callback_data="pro_post:continue")],
+            [InlineKeyboardButton("📝 Изменить базовые данные", callback_data="pro_edit_basic")],
             [InlineKeyboardButton("🩺 Особенности здоровья", callback_data="pro_post:health")],
             [InlineKeyboardButton("💉 Прививки/паразиты", callback_data="pro_post:vaccines")],
             [InlineKeyboardButton("📝 Важное о питомце", callback_data="pro_post:note")],
+        ]
+    )
+
+
+def build_mode_keyboard(pet_type: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🚑 Скорая помощь", callback_data=f"{pet_type}_emergency")],
+            [InlineKeyboardButton("🍖 Питание и уход", callback_data=f"{pet_type}_care")],
+            [InlineKeyboardButton("💉 Прививки и профилактика", callback_data=f"{pet_type}_vaccines")],
+            [InlineKeyboardButton("🏠 В главное меню", callback_data="back_to_main")],
         ]
     )
 
@@ -254,12 +269,20 @@ async def handle_pet_profile_actions(
     user_id = callback_query.from_user.id
     action = (callback_query.data or "").split("_")[-1]
     if action == "ask":
-        pending = pop_pending_question(user_id)
-        if pending:
-            await send_backend_response_cb(client_tg, callback_query.message, user_id, pending)
-        else:
-            await callback_query.message.reply("Напишите свой вопрос.")
+        set_skip_basic_info(user_id, True)
+        profile = get_pet_profile(user_id) or get_pro_profile(user_id)
+        pet_type = (profile.get("type") if isinstance(profile, dict) else None) or "other"
+        await callback_query.message.edit_text(
+            "Что вас интересует?",
+            reply_markup=build_mode_keyboard(pet_type),
+        )
         return
+    if action == "update":
+        pet_profile = get_pet_profile(user_id)
+        if get_pet_profile_loaded(user_id) and pet_profile:
+            set_pro_step(user_id, PRO_STEP_POST_MENU, True)
+            await show_post_menu(callback_query.message, user_id)
+            return
     await start_pro_flow(callback_query.message, user_id, force=True)
 
 
@@ -271,6 +294,10 @@ async def handle_pro_callbacks(
     await callback_query.answer()
     user_id = callback_query.from_user.id
     data = callback_query.data or ""
+
+    if data == "pro_edit_basic":
+        await start_pro_flow(callback_query.message, user_id, force=True)
+        return
 
     if data.startswith("pro_species:"):
         value = data.split(":", 1)[1]
@@ -383,11 +410,10 @@ async def handle_pro_callbacks(
             set_pro_step(user_id, PRO_STEP_POST_MENU, True)
             await show_post_menu(callback_query.message, user_id)
             return
-        add_health_tag(user_id, value)
-        set_pro_temp_field(user_id, "health_tag", value)
+        set_health_category(user_id, value)
         set_pro_step(user_id, PRO_STEP_HEALTH_NOTE, False)
         await callback_query.message.reply(
-            "Опишите одним сообщением, что именно (коротко, без лекарств/дозировок)."
+            "Опишите, что именно беспокоит (коротко, без лекарств/дозировок)."
         )
         return
 
@@ -501,15 +527,13 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
         return True
 
     if pro_step == PRO_STEP_HEALTH_NOTE:
-        tag = get_pro_temp(user_id).get("health_tag")
+        tag = get_health_category(user_id)
         if tag:
+            add_health_tag(user_id, tag)
             set_health_note(user_id, tag, message.text.strip())
-            set_pro_temp_field(user_id, "health_tag", None)
-        set_pro_step(user_id, PRO_STEP_HEALTH_PICK, True)
-        await message.reply(
-            "Особенности (если известно). Выберите пункт или нажмите Пропустить.",
-            reply_markup=build_health_keyboard(),
-        )
+        set_health_category(user_id, None)
+        set_pro_step(user_id, PRO_STEP_POST_MENU, True)
+        await show_post_menu(message, user_id)
         return True
 
     if pro_step == PRO_STEP_OWNER_NOTE:
