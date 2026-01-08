@@ -62,6 +62,8 @@ def get_active_pet(cur, user_id):
 
 def upsert_active_pet(cur, user_id, pet_dict):
     pet_type = pet_dict.get("type")
+    if not pet_type:
+        raise ValueError("missing pet.type")
     name = pet_dict.get("name")
     sex = pet_dict.get("sex") or "unknown"
     birth_date = _parse_birth_date(pet_dict.get("birth_date"))
@@ -186,11 +188,15 @@ def chat_ask(
             window_end = window_start + timedelta(days=1)
 
             telegram_user_id = payload.user.telegram_user_id
-            pet_dict = None
-            if payload.pet is not None:
-                pet_dict = payload.pet
-            elif payload.pet_profile is not None:
-                pet_dict = payload.pet_profile
+            pet_dict = payload.pet_profile or payload.pet
+            pet_dict_for_upsert = pet_dict
+            if pet_dict_for_upsert is not None and not pet_dict_for_upsert.get("type"):
+                logger.warning(
+                    "Skipping pet upsert: missing pet.type request_id=%s user_id=%s",
+                    x_request_id,
+                    telegram_user_id,
+                )
+                pet_dict_for_upsert = None
             user_id = None
             user_plan = None
             limits_remaining_today = -1
@@ -224,15 +230,31 @@ def chat_ask(
                         "update request_dedup set user_id = %s where request_id = %s and user_id is null",
                         (user_id, x_request_id),
                     )
-                    if user_plan == "pro" and pet_dict is not None:
+                    if user_plan == "pro" and pet_dict_for_upsert is not None:
+                        savepoint_created = False
                         try:
-                            upsert_active_pet(cur, user_id, pet_dict)
+                            cur.execute("savepoint pet_upsert")
+                            savepoint_created = True
+                            upsert_active_pet(cur, user_id, pet_dict_for_upsert)
                         except Exception:
                             logger.exception(
                                 "Failed to upsert pet profile request_id=%s user_id=%s",
                                 x_request_id,
                                 user_id,
                             )
+                            if savepoint_created:
+                                try:
+                                    cur.execute("rollback to savepoint pet_upsert")
+                                    cur.execute("release savepoint pet_upsert")
+                                except Exception:
+                                    logger.exception(
+                                        "Failed to rollback pet upsert savepoint request_id=%s user_id=%s",
+                                        x_request_id,
+                                        user_id,
+                                    )
+                        else:
+                            if savepoint_created:
+                                cur.execute("release savepoint pet_upsert")
 
                     cur.execute(
                         "select window_start_at, window_end_at, count, cooldown_until "
@@ -342,6 +364,28 @@ def chat_ask(
                     if daily_limit is not None and count is not None:
                         limits_remaining_today = max(daily_limit - (count + 1), 0)
 
+            effective_pet_profile = pet_dict or None
+            if not effective_pet_profile and user_id:
+                active_pet = get_active_pet(cur, user_id)
+                if active_pet:
+                    effective_pet_profile = active_pet[8] or None
+            if isinstance(effective_pet_profile, str):
+                try:
+                    effective_pet_profile = json.loads(effective_pet_profile)
+                except json.JSONDecodeError:
+                    effective_pet_profile = None
+            has_effective_pet_profile = bool(effective_pet_profile)
+            pet_profile_keys = (
+                list(effective_pet_profile.keys())
+                if isinstance(effective_pet_profile, dict)
+                else None
+            )
+            logger.info(
+                "CHAT_PET_PROFILE has_effective_pet_profile=%s keys=%s",
+                has_effective_pet_profile,
+                pet_profile_keys,
+            )
+
             session_prefix = ""
             session_context = None
             active_session_id = None
@@ -374,6 +418,14 @@ def chat_ask(
             final_user_text = original_text
             if session_prefix:
                 final_user_text = f"{session_prefix}\n\nТекущий вопрос: {original_text}"
+            if has_effective_pet_profile:
+                pet_profile_json = json.dumps(
+                    effective_pet_profile, ensure_ascii=False
+                )
+                final_user_text = (
+                    "ПРОФИЛЬ ПИТОМЦА (из анкеты пользователя):\n"
+                    f"{pet_profile_json}\n\n{final_user_text}"
+                )
             selected_mode = (
                 active_mode if active_mode in PROMPTS_BY_MODE else DEFAULT_MODE
             )

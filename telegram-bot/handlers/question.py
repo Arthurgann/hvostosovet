@@ -6,7 +6,7 @@ import os
 import re
 import uuid
 import config
-from services.backend_client import ask_backend
+from services.backend_client import ask_backend, get_active_pet
 from services.state import (
     get_profile,
     get_pro_profile,
@@ -14,6 +14,8 @@ from services.state import (
     get_pro_temp,
     get_last_limits,
     get_profile_created_shown,
+    get_pet_profile,
+    get_pet_profile_loaded,
     is_awaiting_button,
     set_basic_info,
     set_health_note,
@@ -22,6 +24,8 @@ from services.state import (
     set_pending_question,
     set_profile_created_shown,
     set_profile_field,
+    set_pet_profile,
+    set_pet_profile_loaded,
     set_pro_step,
     set_pro_temp_field,
     set_question,
@@ -72,6 +76,15 @@ def build_pet_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🐶 Собака", callback_data="pet_dog")],
             [InlineKeyboardButton("🐱 Кошка", callback_data="pet_cat")],
             [InlineKeyboardButton("🐾 Другое", callback_data="pet_other")],
+        ]
+    )
+
+
+def build_pet_profile_loaded_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("❓ Задать вопрос", callback_data="pet_profile_ask")],
+            [InlineKeyboardButton("✏️ Обновить профиль", callback_data="pet_profile_update")],
         ]
     )
 
@@ -232,7 +245,31 @@ def get_pro_prompt_and_keyboard(user_id: int, step: str) -> tuple[str, InlineKey
     return None
 
 
-async def start_pro_flow(message: Message, user_id: int) -> None:
+async def maybe_load_pet_profile(message: Message, user_id: int) -> bool:
+    if get_pet_profile_loaded(user_id):
+        return get_pet_profile(user_id) is not None
+
+    pet_profile = await asyncio.to_thread(get_active_pet, user_id)
+    if pet_profile is None:
+        return False
+
+    set_pet_profile(user_id, pet_profile)
+    set_pet_profile_loaded(user_id, True)
+    name = (pet_profile.get("name") or "").strip()
+    title_name = f" {name}" if name else ""
+    await message.reply(
+        f"🐾 Я уже помню вашего питомца{title_name}\n"
+        "Могу сразу помочь с вопросом или вы можете обновить профиль.",
+        reply_markup=build_pet_profile_loaded_keyboard(),
+    )
+    return True
+
+
+async def start_pro_flow(message: Message, user_id: int, force: bool = False) -> None:
+    if not force:
+        loaded = await maybe_load_pet_profile(message, user_id)
+        if loaded:
+            return
     set_pro_step(user_id, PRO_STEP_SPECIES, True)
     await message.reply("Кто у вас?", reply_markup=build_species_keyboard())
 
@@ -254,7 +291,25 @@ async def send_backend_response(
 ) -> None:
     profile = get_profile(user_id)
     pro_profile = get_pro_profile(user_id)
+    pet_profile = get_pet_profile(user_id) or (pro_profile if pro_profile else None)
     question = question_text or (profile.get("question") if profile else None) or ""
+    pet_profile_to_send = pet_profile
+    if isinstance(pet_profile_to_send, dict):
+        pet_profile_keys = sorted(pet_profile_to_send.keys())
+        if not pet_profile_to_send.get("type"):
+            print(
+                "[WARN] Skipping pet_profile: missing type "
+                f"user_id={user_id} keys={pet_profile_keys}"
+            )
+            pet_profile_to_send = None
+        else:
+            print(f"[BACKEND] pet_profile_keys={pet_profile_keys}")
+    elif pet_profile_to_send is not None:
+        print(
+            "[WARN] Skipping pet_profile: unexpected payload type "
+            f"user_id={user_id} type={type(pet_profile_to_send).__name__}"
+        )
+        pet_profile_to_send = None
 
     if profile and profile.get("type") and profile.get("basic_info"):
         summary = (
@@ -280,10 +335,18 @@ async def send_backend_response(
         print(
             "[BACKEND] calling /v1/chat/ask "
             f"user_id={user_id} rid={request_id} "
-            f"has_profile={bool(pro_profile)} text_len={len(summary)}"
+            f"has_profile={bool(pro_profile)} has_pet_profile={bool(pet_profile_to_send)} text_len={len(summary)}"
         )
         result = await asyncio.to_thread(
-            ask_backend, base_url, token, user_id, summary, current_mode, request_id, pro_profile
+            ask_backend,
+            base_url,
+            token,
+            user_id,
+            summary,
+            current_mode,
+            request_id,
+            pro_profile,
+            pet_profile_to_send,
         )
         print(f"[BACKEND] status={result.get('status')} ok={result.get('ok')}")
         ok = result.get("ok")
@@ -353,6 +416,20 @@ def setup_question_handlers(app: Client):
         await callback_query.answer()
         await callback_query.message.reply("💎 Оформление Pro скоро появится. Спасибо за интерес!")
 
+    @app.on_callback_query(filters.regex("^pet_profile_(ask|update)$"))
+    async def handle_pet_profile_actions(client_tg: Client, callback_query: CallbackQuery):
+        await callback_query.answer()
+        user_id = callback_query.from_user.id
+        action = (callback_query.data or "").split("_")[-1]
+        if action == "ask":
+            pending = pop_pending_question(user_id)
+            if pending:
+                await send_backend_response(client_tg, callback_query.message, user_id, pending)
+            else:
+                await callback_query.message.reply("Напишите свой вопрос.")
+            return
+        await start_pro_flow(callback_query.message, user_id, force=True)
+
     @app.on_callback_query(filters.regex("^pro_"))
     async def handle_pro_callbacks(client_tg: Client, callback_query: CallbackQuery):
         await callback_query.answer()
@@ -362,6 +439,7 @@ def setup_question_handlers(app: Client):
         if data.startswith("pro_species:"):
             value = data.split(":", 1)[1]
             set_profile_field(user_id, "species", value)
+            set_profile_field(user_id, "type", value)
             set_pro_step(user_id, PRO_STEP_NAME, False)
             await callback_query.message.reply("Как зовут питомца? (можно пропустить)")
             return
@@ -509,6 +587,7 @@ def setup_question_handlers(app: Client):
         context = normalize_mode(context)
         current_mode = context
         start_profile(user_id, pet_type, context, current_mode=current_mode)
+        set_profile_field(user_id, "type", pet_type)
 
         if pet_type == "dog":
             example = "Такса, 3 года, девочка, живёт в квартире, гуляет 2 раза в день, склонна к полноте."

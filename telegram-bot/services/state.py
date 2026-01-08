@@ -33,11 +33,32 @@ def get_pro_profile(user_id: int) -> dict:
 def set_pro_profile(user_id: int, profile: dict) -> None:
     p = _user_profiles[user_id]
     p["profile"] = profile
+    p["pet_profile"] = profile
+
+
+def get_pet_profile(user_id: int) -> dict | None:
+    p = _user_profiles.get(user_id) or {}
+    return p.get("pet_profile")
+
+
+def set_pet_profile(user_id: int, profile: dict) -> None:
+    p = _user_profiles[user_id]
+    p["pet_profile"] = profile
+
+
+def get_pet_profile_loaded(user_id: int) -> bool:
+    p = _user_profiles.get(user_id) or {}
+    return bool(p.get("pet_profile_loaded"))
+
+
+def set_pet_profile_loaded(user_id: int, loaded: bool) -> None:
+    p = _user_profiles[user_id]
+    p["pet_profile_loaded"] = loaded
 
 
 def set_profile_field(user_id: int, path: str, value) -> None:
     p = _user_profiles[user_id]
-    profile = p.get("profile") or {}
+    profile = p.get("profile") or p.get("pet_profile") or {}
     cursor = profile
     parts = path.split(".")
     for part in parts[:-1]:
@@ -48,6 +69,7 @@ def set_profile_field(user_id: int, path: str, value) -> None:
         cursor = node
     cursor[parts[-1]] = value
     p["profile"] = profile
+    p["pet_profile"] = profile
 
 
 def get_pro_step(user_id: int) -> str:
@@ -102,6 +124,7 @@ def add_health_tag(user_id: int, tag: str) -> None:
     health["notes_by_tag"] = health.get("notes_by_tag") or {}
     profile["health"] = health
     p["profile"] = profile
+    p["pet_profile"] = profile
 
 
 def set_health_note(user_id: int, tag: str, note: str) -> None:
@@ -114,6 +137,7 @@ def set_health_note(user_id: int, tag: str, note: str) -> None:
     health["tags"] = health.get("tags") or []
     profile["health"] = health
     p["profile"] = profile
+    p["pet_profile"] = profile
 
 
 def set_owner_note(user_id: int, note: str) -> None:
@@ -153,9 +177,8 @@ def start_profile(
     pending_question = existing.get("pending_question")
     preserved = {
         "profile": existing.get("profile"),
-        "pro_step": existing.get("pro_step"),
-        "awaiting_button": existing.get("awaiting_button"),
-        "pro_temp": existing.get("pro_temp"),
+        "pet_profile": existing.get("pet_profile"),
+        "pet_profile_loaded": existing.get("pet_profile_loaded"),
         "last_limits": existing.get("last_limits"),
         "pro_profile_created_shown": existing.get("pro_profile_created_shown"),
     }
