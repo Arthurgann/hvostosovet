@@ -56,6 +56,26 @@ def set_pet_profile_loaded(user_id: int, loaded: bool) -> None:
     p["pet_profile_loaded"] = loaded
 
 
+def set_profile_dirty(user_id: int, value: bool) -> None:
+    p = _user_profiles[user_id]
+    p["profile_dirty"] = bool(value)
+
+
+def is_profile_dirty(user_id: int) -> bool:
+    p = _user_profiles.get(user_id) or {}
+    return bool(p.get("profile_dirty"))
+
+
+def set_profile_saving(user_id: int, value: bool) -> None:
+    p = _user_profiles[user_id]
+    p["profile_saving"] = bool(value)
+
+
+def is_profile_saving(user_id: int) -> bool:
+    p = _user_profiles.get(user_id) or {}
+    return bool(p.get("profile_saving"))
+
+
 def set_skip_basic_info(user_id: int, value: bool) -> None:
     p = _user_profiles[user_id]
     p["skip_basic_info"] = bool(value)
@@ -122,6 +142,8 @@ def reset_pro_profile(user_id: int) -> None:
     p.pop("pro_temp", None)
     p.pop("pro_profile_created_shown", None)
     p.pop("last_limits", None)
+    p.pop("profile_dirty", None)
+    p.pop("profile_saving", None)
 
 
 def add_health_tag(user_id: int, tag: str) -> None:
@@ -201,6 +223,8 @@ def start_profile(
         "last_limits": existing.get("last_limits"),
         "pro_profile_created_shown": existing.get("pro_profile_created_shown"),
         "skip_basic_info": existing.get("skip_basic_info"),
+        "profile_dirty": existing.get("profile_dirty"),
+        "profile_saving": existing.get("profile_saving"),
     }
     _user_profiles[user_id] = {"type": pet_type, "context": context, "step": "basic_info"}
     if pending_question:

@@ -1,9 +1,11 @@
 import asyncio
 import os
 import re
+import uuid
 from pyrogram import Client
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from services.backend_client import get_active_pet
+import config
+from services.backend_client import ask_backend, get_active_pet
 from services.state import (
     get_pro_profile,
     get_pro_step,
@@ -12,12 +14,16 @@ from services.state import (
     get_pet_profile,
     get_pet_profile_loaded,
     is_awaiting_button,
+    is_profile_dirty,
+    is_profile_saving,
     set_health_note,
     set_health_category,
     get_health_category,
     set_owner_note,
+    set_profile_dirty,
     set_profile_created_shown,
     set_profile_field,
+    set_profile_saving,
     set_pet_profile,
     set_pet_profile_loaded,
     set_skip_basic_info,
@@ -118,8 +124,11 @@ def build_after_bcs_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def build_post_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def build_post_menu_keyboard(include_save: bool = False) -> InlineKeyboardMarkup:
+    rows = []
+    if include_save:
+        rows.append([InlineKeyboardButton("💾 Сохранить изменения", callback_data="pro_save_profile")])
+    rows.extend(
         [
             [InlineKeyboardButton("✅ Вернуться к вопросу", callback_data="pro_post:continue")],
             [InlineKeyboardButton("📝 Изменить базовые данные", callback_data="pro_edit_basic")],
@@ -128,6 +137,7 @@ def build_post_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📝 Важное о питомце", callback_data="pro_post:note")],
         ]
     )
+    return InlineKeyboardMarkup(rows)
 
 
 def build_mode_keyboard(pet_type: str) -> InlineKeyboardMarkup:
@@ -187,10 +197,19 @@ def get_pro_prompt_and_keyboard(user_id: int, step: str) -> tuple[str, InlineKey
     if step == PRO_STEP_WEIGHT_BCS:
         return "По виду сейчас он скорее...", build_bcs_keyboard()
     if step == PRO_STEP_WEIGHT_AFTER_BCS_ASK_KG:
-        return "Если знаете точный вес — хотите указать?", build_after_bcs_keyboard()
+        return "Если знаете точный вес - хотите указать?", build_after_bcs_keyboard()
     if step in (PRO_STEP_DONE, PRO_STEP_POST_MENU):
         pro_profile = get_pro_profile(user_id)
         name = (pro_profile.get("name") or "").strip()
+        if is_profile_dirty(user_id):
+            title = f"✨ Обновление профиля: {name}" if name else "✨ Обновление профиля"
+            return (
+                f"{title}\n\n"
+                "Изменения внесены и ждут подтверждения.\n"
+                "Нажмите «💾 Сохранить изменения», чтобы обновить данные в базе, или продолжайте редактирование.\n\n"
+                "Вы также всегда можете вернуться к вопросу.",
+                build_post_menu_keyboard(include_save=True),
+            )
         title_name = f" {name}" if name else ""
         if get_profile_created_shown(user_id):
             status_line = f"Профиль питомца{title_name} обновлён ✅"
@@ -423,6 +442,7 @@ async def handle_pro_callbacks(
             set_profile_field(user_id, "vaccines", None)
         else:
             set_profile_field(user_id, "vaccines.status", value)
+        set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_PARASITES, True)
         await callback_query.message.reply(
             "Обработка от паразитов:",
@@ -436,9 +456,71 @@ async def handle_pro_callbacks(
             set_profile_field(user_id, "parasites", None)
         else:
             set_profile_field(user_id, "parasites.status", value)
+        set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_POST_MENU, True)
         await show_post_menu(callback_query.message, user_id)
         return
+
+
+async def handle_save_profile(
+    client_tg: Client,
+    callback_query: CallbackQuery,
+) -> None:
+    user_id = callback_query.from_user.id
+    if is_profile_saving(user_id):
+        await callback_query.answer("Сохраняю… подождите", show_alert=False)
+        return
+    await callback_query.answer()
+    set_profile_saving(user_id, True)
+    profile = get_pet_profile(user_id) or {}
+    if not isinstance(profile, dict):
+        profile = {}
+    if not profile.get("type") and profile.get("species"):
+        profile["type"] = profile["species"]
+    if not profile.get("type"):
+        set_profile_saving(user_id, False)
+        await callback_query.message.reply_text(
+            "Не удалось сохранить: не вижу тип питомца. Откройте «⭐ Мой питомец» и попробуйте снова."
+        )
+        return
+
+    base_url = os.getenv("BACKEND_BASE_URL", "")
+    token = os.getenv("BOT_BACKEND_TOKEN", "")
+    request_id = str(uuid.uuid4())
+    if config.BOT_DEBUG:
+        print(f"[HTTP] POST /v1/chat/ask save_profile user_id={user_id}")
+    try:
+        await callback_query.message.reply("⌛️ Сохраняю изменения профиля… Пожалуйста, подождите.")
+        result = await asyncio.to_thread(
+            ask_backend,
+            base_url,
+            token,
+            user_id,
+            "__save_profile__",
+            "care",
+            request_id,
+            None,
+            profile,
+        )
+        ok = result.get("ok")
+        if config.BOT_DEBUG:
+            status = result.get("status")
+            print(f"[BACKEND] save_profile status={status} ok={ok}")
+        if not ok:
+            await callback_query.message.reply("❗ Не удалось сохранить профиль. Попробуйте позже.")
+            return
+
+        set_profile_dirty(user_id, False)
+        set_profile_saving(user_id, False)
+        await callback_query.message.reply("✅ Профиль сохранён")
+        await show_post_menu(callback_query.message, user_id)
+    except Exception as exc:
+        if config.BOT_DEBUG:
+            print(f"[BACKEND] save_profile error user_id={user_id} err={exc}")
+        await callback_query.message.reply("❗ Не удалось сохранить профиль. Попробуйте позже.")
+        return
+    finally:
+        set_profile_saving(user_id, False)
 
 
 async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
@@ -531,6 +613,7 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
         if tag:
             add_health_tag(user_id, tag)
             set_health_note(user_id, tag, message.text.strip())
+            set_profile_dirty(user_id, True)
         set_health_category(user_id, None)
         set_pro_step(user_id, PRO_STEP_POST_MENU, True)
         await show_post_menu(message, user_id)
@@ -540,6 +623,7 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
         note = message.text.strip()
         if note.lower() not in ("пропустить", "/skip"):
             set_owner_note(user_id, note)
+            set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_POST_MENU, True)
         await show_post_menu(message, user_id)
         return True

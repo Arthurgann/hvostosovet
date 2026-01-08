@@ -11,6 +11,7 @@ from flows.pro_flow import (
     start_pro_flow,
     handle_pet_profile_actions as handle_pet_profile_actions_flow,
     handle_pro_callbacks as handle_pro_callbacks_flow,
+    handle_save_profile as handle_save_profile_flow,
     handle_pro_text_step,
 )
 from services.backend_client import ask_backend
@@ -198,7 +199,11 @@ def setup_question_handlers(app: Client):
     async def handle_pet_profile_actions(client_tg: Client, callback_query: CallbackQuery):
         await handle_pet_profile_actions_flow(client_tg, callback_query, send_backend_response)
 
-    @app.on_callback_query(filters.regex("^pro_"))
+    @app.on_callback_query(filters.regex("^pro_save_profile$"))
+    async def handle_save_profile(client_tg: Client, callback_query: CallbackQuery):
+        await handle_save_profile_flow(client_tg, callback_query)
+
+    @app.on_callback_query(filters.regex("^pro_(?!save_profile$)"))
     async def handle_pro_callbacks(client_tg: Client, callback_query: CallbackQuery):
         await handle_pro_callbacks_flow(client_tg, callback_query, send_backend_response)
 
