@@ -80,9 +80,9 @@ def ask_backend(
     }
 
 
-def get_active_pet(telegram_user_id: int) -> dict | None:
+def get_active_pet(telegram_user_id: int) -> dict | str | None:
     """
-    Calls GET /v1/pets/active and returns pet dict or None.
+    Calls GET /v1/pets/active and returns pet dict, status string, or None.
     """
     base_url = os.getenv("BACKEND_BASE_URL", "").strip().rstrip("/")
     token = os.getenv("BOT_BACKEND_TOKEN", "").strip()
@@ -108,22 +108,33 @@ def get_active_pet(telegram_user_id: int) -> dict | None:
         print(f"[BACKEND] get_active_pet unreachable user_id={telegram_user_id} err={exc}")
         return None
 
-    if status_code != 200:
-        print(f"[BACKEND] get_active_pet status={status_code} user_id={telegram_user_id}")
+    body = {}
+    if raw:
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError:
+            print(f"[BACKEND] get_active_pet invalid json user_id={telegram_user_id}")
+            return None
+
+    if status_code == 200:
+        if isinstance(body, dict) and body.get("ok") is True:
+            pet = body.get("pet")
+            if pet is not None:
+                return pet
+            return "no_active_pet"
         return None
 
-    if not raw:
+    if status_code == 402:
+        if isinstance(body, dict) and body.get("error") == "pro_required":
+            return "pro_required"
+        print(f"[BACKEND] get_active_pet status=402 user_id={telegram_user_id} err={body}")
         return None
 
-    try:
-        body = json.loads(raw.decode("utf-8"))
-    except json.JSONDecodeError:
-        print(f"[BACKEND] get_active_pet invalid json user_id={telegram_user_id}")
+    if status_code == 404:
+        if isinstance(body, dict) and body.get("error") == "no_active_pet":
+            return "no_active_pet"
+        print(f"[BACKEND] get_active_pet status=404 user_id={telegram_user_id} err={body}")
         return None
 
-    if isinstance(body, dict) and body.get("ok") is True:
-        pet = body.get("pet")
-        if pet is not None:
-            return pet
-
+    print(f"[BACKEND] get_active_pet status={status_code} user_id={telegram_user_id} err={body}")
     return None

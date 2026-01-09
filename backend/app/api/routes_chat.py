@@ -717,16 +717,25 @@ def pets_active(telegram_user_id: int):
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "select id from users where telegram_user_id = %s",
+                "select id, plan from users where telegram_user_id = %s",
                 (telegram_user_id,),
             )
             user_row = cur.fetchone()
             if not user_row:
                 return {"ok": True, "pet": None}
             user_id = user_row[0]
+            user_plan = user_row[1]
+            if user_plan != "pro":
+                return JSONResponse(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    content={"ok": False, "error": "pro_required"},
+                )
             pet_row = get_active_pet(cur, user_id)
             if not pet_row:
-                return {"ok": True, "pet": None}
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"ok": False, "error": "no_active_pet"},
+                )
             pet = {
                 "id": pet_row[0],
                 "type": pet_row[2],

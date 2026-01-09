@@ -69,7 +69,37 @@ def setup_menu_handlers(app: Client):
         if user_id is not None:
             pet_profile = await asyncio.to_thread(get_active_pet, user_id)
 
-        if pet_profile:
+        if pet_profile == "pro_required":
+            await callback_query.message.edit_text(
+                "💎 Профиль питомца доступен в Pro. Оформите Pro, чтобы заполнить анкету.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💎 Оформить Pro", callback_data="upsell_pro")],
+                    [InlineKeyboardButton(BTN_HOME, callback_data="back_to_main")]
+                ])
+            )
+            return
+
+        if pet_profile == "no_active_pet":
+            await callback_query.message.edit_text(
+                "💎 Pro активен ✅\n"
+                "Профиль ещё не заполнен. Заполните анкету, чтобы я запомнил питомца.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(BTN_FILL_FORM, callback_data="pet_profile_update")],
+                    [InlineKeyboardButton(BTN_HOME, callback_data="back_to_main")]
+                ])
+            )
+            return
+
+        if pet_profile is None:
+            await callback_query.message.edit_text(
+                "Сервер временно недоступен, попробуйте позже.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(BTN_HOME, callback_data="back_to_main")]
+                ])
+            )
+            return
+
+        if isinstance(pet_profile, dict):
             name = pet_profile.get("name")
             text = "⭐ Я помню вашего питомца"
             if name:
@@ -97,9 +127,8 @@ def setup_menu_handlers(app: Client):
             return
 
         await callback_query.message.edit_text(
-            "Профиль питомца ещё не заполнен. Хотите заполнить сейчас?",
+            "Сервер временно недоступен, попробуйте позже.",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton(BTN_FILL_FORM, callback_data="pet_profile_update")],
                 [InlineKeyboardButton(BTN_HOME, callback_data="back_to_main")]
             ])
         )
