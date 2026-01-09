@@ -237,10 +237,10 @@ def get_pro_prompt_and_keyboard(user_id: int, step: str) -> tuple[str, InlineKey
         pro_profile = get_pro_profile(user_id)
         name = (pro_profile.get("name") or "").strip()
         if is_profile_dirty(user_id):
-            title = f"✨ Обновление профиля: {name}" if name else "✨ Обновление профиля"
+            title = f"✨ Обновление профиля: {name}" if name else "✨ Обновление профиля …"
             return (
                 f"{title}\n\n"
-                "Изменения внесены и ждут подтверждения.\n"
+                "Изменения внесены и ждут подтверждения.\n\n"
                 f"Нажмите «{BTN_SAVE_CHANGES}», чтобы обновить данные в базе, или продолжайте редактирование.\n\n"
                 "Вы также всегда можете вернуться к вопросу.",
                 build_post_menu_keyboard(include_save=True),
@@ -301,6 +301,12 @@ async def start_pro_flow(message: Message, user_id: int, force: bool = False) ->
         loaded = await maybe_load_pet_profile(message, user_id)
         if loaded:
             return
+        set_pro_temp_field(user_id, "is_first_profile_create", True)
+    else:
+        temp = get_pro_temp(user_id)
+        if "is_first_profile_create" not in temp:
+            is_first = not get_pet_profile_loaded(user_id) and not get_pet_profile(user_id)
+            set_pro_temp_field(user_id, "is_first_profile_create", is_first)
     set_pro_step(user_id, PRO_STEP_SPECIES, True)
     await message.reply("Кто у вас?", reply_markup=build_species_keyboard())
 
@@ -312,6 +318,108 @@ async def show_post_menu(message: Message, user_id: int) -> None:
         await message.reply(text, reply_markup=keyboard)
     if not get_profile_created_shown(user_id):
         set_profile_created_shown(user_id, True)
+
+
+async def save_profile_now(
+    message: Message,
+    user_id: int,
+    success_text: str | None = None,
+) -> bool:
+    if is_profile_saving(user_id):
+        await message.reply("Сохраняю: подождите")
+        return False
+    set_profile_saving(user_id, True)
+    # 1) Берём профиль из state (pet_profile) или fallback из pro_profile
+    profile = get_pet_profile(user_id) or get_pro_profile(user_id) or {}
+    if not isinstance(profile, dict):
+        profile = {}
+
+    # 2) Fallback type из species (если вдруг)
+    if not profile.get("type") and profile.get("species"):
+        profile["type"] = profile["species"]
+
+    # 3) Если type всё ещё нет - пробуем подтянуть активного питомца из backend
+    if not profile.get("type"):
+        try:
+            active = await asyncio.to_thread(get_active_pet, user_id)
+            if isinstance(active, dict):
+                active_type = active.get("type")
+                if active_type:
+                    profile["type"] = active_type
+                    # сохраняем обратно, чтобы дальше не терялось
+                    set_pet_profile(user_id, profile)
+                    set_pet_profile_loaded(user_id, True)
+        except Exception:
+            pass
+
+    if not profile.get("type"):
+        set_profile_saving(user_id, False)
+        await message.reply(
+            f"Не удалось сохранить: не вижу тип питомца. Откройте <{BTN_MY_PET}> и попробуйте снова."
+        )
+        return False
+
+    profile.pop("species", None)
+
+    base_url = os.getenv("BACKEND_BASE_URL", "")
+    token = os.getenv("BOT_BACKEND_TOKEN", "")
+    request_id = str(uuid.uuid4())
+    if config.BOT_DEBUG:
+        print(f"[HTTP] POST /v1/chat/ask save_profile user_id={user_id}")
+    try:
+        await message.reply("⌛️ Сохраняю изменения профиля… Пожалуйста, подождите.")
+        result = await asyncio.to_thread(
+            ask_backend,
+            base_url,
+            token,
+            user_id,
+            "__save_profile__",
+            "care",
+            request_id,
+            None,
+            profile,
+        )
+        ok = result.get("ok")
+        if config.BOT_DEBUG:
+            status = result.get("status")
+            print(f"[BACKEND] save_profile status={status} ok={ok}")
+        if not ok:
+            await message.reply("❗ Не удалось сохранить профиль. Попробуйте позже.")
+            return False
+
+        set_profile_dirty(user_id, False)
+        await message.reply(success_text or "✅ Профиль сохранён")
+        return True
+    except Exception as exc:
+        if config.BOT_DEBUG:
+            print(f"[BACKEND] save_profile error user_id={user_id} err={exc}")
+        await message.reply("❗ Не удалось сохранить профиль. Попробуйте позже.")
+        return False
+    finally:
+        set_profile_saving(user_id, False)
+
+
+async def finalize_basic_profile(message: Message, user_id: int) -> None:
+    set_pro_step(user_id, PRO_STEP_POST_MENU, True)
+    temp = get_pro_temp(user_id)
+    is_first = bool(temp.get("is_first_profile_create"))
+    if is_first:
+        success_text = (
+            "Профиль питомца обновлён ✅\n"
+            "Спасибо, эта информация поможет мне отвечать точнее.\n\n"
+            "Вы можете продолжить заполнять профиль\n"
+            "или вернуться к своему вопросу в любой момент."
+        )
+        ok = await save_profile_now(message, user_id, success_text=success_text)
+        if ok:
+            set_profile_created_shown(user_id, True)
+            await show_post_menu(message, user_id)
+            return
+        set_profile_dirty(user_id, True)
+        await show_post_menu(message, user_id)
+        return
+    set_profile_dirty(user_id, True)
+    await show_post_menu(message, user_id)
 
 
 async def handle_pet_profile_actions(
@@ -350,6 +458,7 @@ async def handle_pro_callbacks(
     data = callback_query.data or ""
 
     if data == "pro_edit_basic":
+        set_pro_temp_field(user_id, "is_first_profile_create", False)
         await start_pro_flow(callback_query.message, user_id, force=True)
         return
 
@@ -387,16 +496,14 @@ async def handle_pro_callbacks(
             return
         set_profile_field(user_id, "weight_kg", None)
         set_profile_field(user_id, "bcs", None)
-        set_pro_step(user_id, PRO_STEP_POST_MENU, True)
-        await show_post_menu(callback_query.message, user_id)
+        await finalize_basic_profile(callback_query.message, user_id)
         return
 
     if data.startswith("pro_bcs:"):
         value = data.split(":", 1)[1]
         if value == "skip":
             set_profile_field(user_id, "bcs", None)
-            set_pro_step(user_id, PRO_STEP_POST_MENU, True)
-            await show_post_menu(callback_query.message, user_id)
+            await finalize_basic_profile(callback_query.message, user_id)
             return
         set_profile_field(user_id, "bcs", value)
         temp = get_pro_temp(user_id)
@@ -407,8 +514,7 @@ async def handle_pro_callbacks(
                 reply_markup=build_after_bcs_keyboard(),
             )
         else:
-            set_pro_step(user_id, PRO_STEP_POST_MENU, True)
-            await show_post_menu(callback_query.message, user_id)
+            await finalize_basic_profile(callback_query.message, user_id)
         return
 
     if data.startswith("pro_after_bcs:"):
@@ -420,8 +526,7 @@ async def handle_pro_callbacks(
                 "Напишите вес в кг (например: 6.2). Можно приблизительно."
             )
         else:
-            set_pro_step(user_id, PRO_STEP_POST_MENU, True)
-            await show_post_menu(callback_query.message, user_id)
+            await finalize_basic_profile(callback_query.message, user_id)
         return
 
     if data.startswith("pro_post:"):
@@ -505,77 +610,9 @@ async def handle_save_profile(
         await callback_query.answer("Сохраняю… подождите", show_alert=False)
         return
     await callback_query.answer()
-    set_profile_saving(user_id, True)
-    # 1) Берём профиль из state (pet_profile) или fallback из pro_profile
-    profile = get_pet_profile(user_id) or get_pro_profile(user_id) or {}
-    if not isinstance(profile, dict):
-        profile = {}
-
-    # 2) Fallback type из species (если вдруг)
-    if not profile.get("type") and profile.get("species"):
-        profile["type"] = profile["species"]
-
-    # 3) Если type всё ещё нет — пробуем подтянуть активного питомца из backend
-    if not profile.get("type"):
-        try:
-            active = await asyncio.to_thread(get_active_pet, user_id)
-            if isinstance(active, dict):
-                active_type = active.get("type")
-                if active_type:
-                    profile["type"] = active_type
-                    # сохраняем обратно, чтобы дальше не терялось
-                    set_pet_profile(user_id, profile)
-                    set_pet_profile_loaded(user_id, True)
-        except Exception:
-            pass
-
-    if not profile.get("type"):
-        set_profile_saving(user_id, False)
-        await callback_query.message.reply_text(
-            f"Не удалось сохранить: не вижу тип питомца. Откройте «{BTN_MY_PET}» и попробуйте снова."
-        )
-        return
-
-    profile.pop("species", None)
-
-    base_url = os.getenv("BACKEND_BASE_URL", "")
-    token = os.getenv("BOT_BACKEND_TOKEN", "")
-    request_id = str(uuid.uuid4())
-    if config.BOT_DEBUG:
-        print(f"[HTTP] POST /v1/chat/ask save_profile user_id={user_id}")
-    try:
-        await callback_query.message.reply("⌛️ Сохраняю изменения профиля… Пожалуйста, подождите.")
-        result = await asyncio.to_thread(
-            ask_backend,
-            base_url,
-            token,
-            user_id,
-            "__save_profile__",
-            "care",
-            request_id,
-            None,
-            profile,
-        )
-        ok = result.get("ok")
-        if config.BOT_DEBUG:
-            status = result.get("status")
-            print(f"[BACKEND] save_profile status={status} ok={ok}")
-        if not ok:
-            await callback_query.message.reply("❗ Не удалось сохранить профиль. Попробуйте позже.")
-            return
-
-        set_profile_dirty(user_id, False)
-        set_profile_saving(user_id, False)
-        await callback_query.message.reply("✅ Профиль сохранён")
+    ok = await save_profile_now(callback_query.message, user_id)
+    if ok:
         await show_post_menu(callback_query.message, user_id)
-    except Exception as exc:
-        if config.BOT_DEBUG:
-            print(f"[BACKEND] save_profile error user_id={user_id} err={exc}")
-        await callback_query.message.reply("❗ Не удалось сохранить профиль. Попробуйте позже.")
-        return
-    finally:
-        set_profile_saving(user_id, False)
-
 
 async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
     user_id = message.from_user.id
@@ -658,8 +695,7 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
                 reply_markup=build_bcs_keyboard(),
             )
         else:
-            set_pro_step(user_id, PRO_STEP_POST_MENU, True)
-            await show_post_menu(message, user_id)
+            await finalize_basic_profile(message, user_id)
         return True
 
     if pro_step == PRO_STEP_HEALTH_NOTE:
