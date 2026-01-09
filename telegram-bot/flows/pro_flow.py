@@ -404,13 +404,7 @@ async def finalize_basic_profile(message: Message, user_id: int) -> None:
     temp = get_pro_temp(user_id)
     is_first = bool(temp.get("is_first_profile_create"))
     if is_first:
-        success_text = (
-            "Профиль питомца обновлён ✅\n"
-            "Спасибо, эта информация поможет мне отвечать точнее.\n\n"
-            "Вы можете продолжить заполнять профиль\n"
-            "или вернуться к своему вопросу в любой момент."
-        )
-        ok = await save_profile_now(message, user_id, success_text=success_text)
+        ok = await save_profile_now(message, user_id, success_text="✅ Профиль сохранён")
         if ok:
             set_profile_created_shown(user_id, True)
             await show_post_menu(message, user_id)
