@@ -38,6 +38,23 @@ class ChatAskPayload(BaseModel):
     pet_profile: dict | None = None
 
 
+def deep_merge_dict(base: dict | None, patch: dict | None) -> dict:
+    """
+    Deep-merge словарей: patch имеет приоритет, base сохраняется.
+    Для dict -> рекурсивно.
+    Для list/str/int/etc -> patch полностью заменяет значение.
+    """
+    base = base or {}
+    patch = patch or {}
+    out = dict(base)
+    for k, v in patch.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = deep_merge_dict(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
 def _parse_birth_date(value):
     if not value or not isinstance(value, str):
         return None
@@ -60,7 +77,59 @@ def get_active_pet(cur, user_id):
     return cur.fetchone()
 
 
+def build_pet_dict_from_row(active_pet_row) -> dict:
+    """
+    Собирает полный pet_dict из колонок pets + jsonb profile.
+    Колонки считаем источником правды для базовых полей.
+    """
+    if not active_pet_row:
+        return {}
+
+    # active_pet_row:
+    # 0 id, 1 user_id, 2 type, 3 name, 4 sex, 5 birth_date, 6 age_text, 7 breed, 8 profile, ...
+    pet_type = active_pet_row[2]
+    name = active_pet_row[3]
+    sex = active_pet_row[4]
+    birth_date = active_pet_row[5]
+    age_text = active_pet_row[6]
+    breed = active_pet_row[7]
+    profile = active_pet_row[8] or {}
+
+    if isinstance(profile, str):
+        try:
+            profile = json.loads(profile)
+        except json.JSONDecodeError:
+            profile = {}
+    if not isinstance(profile, dict):
+        profile = {}
+
+    base = {
+        "type": pet_type,
+        "name": name,
+        "sex": sex,
+        "birth_date": birth_date.isoformat() if birth_date else None,
+        "age_text": age_text,
+        "breed": breed,
+    }
+
+    # profile может содержать те же ключи — но базовые поля из колонок важнее
+    merged = dict(profile)
+    merged.update({k: v for k, v in base.items() if v is not None})
+
+    # sex может быть "unknown" — это тоже валидно
+    if "sex" not in merged and sex:
+        merged["sex"] = sex
+
+    return merged
+
+
 def upsert_active_pet(cur, user_id, pet_dict):
+    pet_dict = pet_dict or {}
+    active_pet = get_active_pet(cur, user_id)
+    if active_pet:
+        existing_full = build_pet_dict_from_row(active_pet)
+        pet_dict = deep_merge_dict(existing_full, pet_dict)
+
     pet_type = pet_dict.get("type")
     if not pet_type:
         raise ValueError("missing pet.type")
@@ -71,7 +140,6 @@ def upsert_active_pet(cur, user_id, pet_dict):
     breed = pet_dict.get("breed")
     profile = Json(pet_dict)
 
-    active_pet = get_active_pet(cur, user_id)
     if active_pet:
         pet_id = active_pet[0]
         cur.execute(
@@ -364,6 +432,95 @@ def chat_ask(
                     if daily_limit is not None and count is not None:
                         limits_remaining_today = max(daily_limit - (count + 1), 0)
 
+            # --- SPECIAL: техническое сохранение профиля, без LLM и без sessions ---
+            if payload.text.strip() == "__save_profile__":
+                if user_plan != "pro":
+                    cur.execute(
+                        "update request_dedup "
+                        "set status = 'failed', error_text = 'pro_required', finished_at = now() "
+                        "where request_id = %s",
+                        (x_request_id,),
+                    )
+                    return JSONResponse(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        content={"ok": False, "error": "pro_required"},
+                    )
+
+                pet_to_save = payload.pet_profile or payload.pet
+                if not isinstance(pet_to_save, dict):
+                    pet_to_save = None
+
+                pet_type = pet_to_save.get("type") if pet_to_save else None
+                if not pet_type:
+                    cur.execute(
+                        "update request_dedup "
+                        "set status = 'failed', error_text = 'missing_pet_type', finished_at = now() "
+                        "where request_id = %s",
+                        (x_request_id,),
+                    )
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={"ok": False, "error": "missing_pet_type"},
+                    )
+
+                try:
+                    # --- MERGE: восстанавливаем полную базу из pets (колонки + profile) и накладываем patch ---
+                    active_pet = get_active_pet(cur, user_id)
+                    existing_full = build_pet_dict_from_row(active_pet)
+
+                    if pet_to_save is None or not isinstance(pet_to_save, dict):
+                        pet_to_save = {}
+
+                    # deep-merge: patch поверх полного existing
+                    pet_to_save = deep_merge_dict(existing_full, pet_to_save)
+
+                    # гарантируем type
+                    if not pet_to_save.get("type"):
+                        pet_to_save["type"] = pet_type
+                    # --- END MERGE ---
+
+                    cur.execute("savepoint pet_upsert")
+                    upsert_active_pet(cur, user_id, pet_to_save)
+                    cur.execute("release savepoint pet_upsert")
+                except Exception:
+                    logger.exception(
+                        "Failed to upsert pet profile in __save_profile__ request_id=%s user_id=%s",
+                        x_request_id,
+                        user_id,
+                    )
+                    try:
+                        cur.execute("rollback to savepoint pet_upsert")
+                        cur.execute("release savepoint pet_upsert")
+                    except Exception:
+                        pass
+                    cur.execute(
+                        "update request_dedup "
+                        "set status = 'failed', error_text = 'pet_upsert_failed', finished_at = now() "
+                        "where request_id = %s",
+                        (x_request_id,),
+                    )
+                    return JSONResponse(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        content={"ok": False, "error": "pet_upsert_failed"},
+                    )
+
+                result = {
+                    "ok": True,
+                    "saved": True,
+                    "limits": {
+                        "plan": user_plan or "free",
+                        "remaining_today": limits_remaining_today,
+                        "reset_at": limits_reset_at,
+                    },
+                }
+                cur.execute(
+                    "update request_dedup "
+                    "set status = 'done', response_json = %s, finished_at = now() "
+                    "where request_id = %s",
+                    (Json(result), x_request_id),
+                )
+                return result
+            # --- END SPECIAL ---
             effective_pet_profile = pet_dict or None
             if not effective_pet_profile and user_id:
                 active_pet = get_active_pet(cur, user_id)

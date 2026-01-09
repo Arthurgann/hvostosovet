@@ -6,6 +6,41 @@ from pyrogram import Client
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 import config
 from services.backend_client import ask_backend, get_active_pet
+from ui.labels import (
+    BTN_ASK_QUESTION,
+    BTN_UPDATE_PROFILE,
+    BTN_DOG,
+    BTN_CAT,
+    BTN_OTHER,
+    BTN_SEX_MALE,
+    BTN_SEX_FEMALE,
+    BTN_UNKNOWN,
+    BTN_WEIGHT_KG,
+    BTN_WEIGHT_BCS,
+    BTN_SKIP,
+    BTN_WEIGHT_KG_SHORT,
+    BTN_SAVE_CHANGES,
+    BTN_RETURN_TO_QUESTION,
+    BTN_EDIT_BASIC,
+    BTN_HEALTH_FEATURES,
+    BTN_VACCINES_PREVENTION,
+    BTN_IMPORTANT,
+    BTN_EMERGENCY,
+    BTN_CARE,
+    BTN_VACCINES,
+    BTN_HOME,
+    BTN_HEALTH_SKIN,
+    BTN_HEALTH_GI,
+    BTN_HEALTH_ALLERGY,
+    BTN_HEALTH_MOBILITY,
+    BTN_HEALTH_OTHER,
+    BTN_DONE,
+    BTN_VAX_DONE,
+    BTN_VAX_PARTIAL,
+    BTN_PARASITES_REGULAR,
+    BTN_PARASITES_IRREGULAR,
+    BTN_MY_PET,
+)
 from services.state import (
     get_pro_profile,
     get_pro_step,
@@ -54,8 +89,8 @@ from services.state import (
 def build_pet_profile_loaded_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("❓ Задать вопрос", callback_data="pet_profile_ask")],
-            [InlineKeyboardButton("✏️ Обновить профиль", callback_data="pet_profile_update")],
+            [InlineKeyboardButton(BTN_ASK_QUESTION, callback_data="pet_profile_ask")],
+            [InlineKeyboardButton(BTN_UPDATE_PROFILE, callback_data="pet_profile_update")],
         ]
     )
 
@@ -76,9 +111,9 @@ def is_pro_profile_complete(profile: dict) -> bool:
 def build_species_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🐶 Собака", callback_data="pro_species:dog")],
-            [InlineKeyboardButton("🐱 Кошка", callback_data="pro_species:cat")],
-            [InlineKeyboardButton("🐾 Другое", callback_data="pro_species:other")],
+            [InlineKeyboardButton(BTN_DOG, callback_data="pro_species:dog")],
+            [InlineKeyboardButton(BTN_CAT, callback_data="pro_species:cat")],
+            [InlineKeyboardButton(BTN_OTHER, callback_data="pro_species:other")],
         ]
     )
 
@@ -86,9 +121,9 @@ def build_species_keyboard() -> InlineKeyboardMarkup:
 def build_sex_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("♂ Самец", callback_data="pro_sex:male")],
-            [InlineKeyboardButton("♀ Самка", callback_data="pro_sex:female")],
-            [InlineKeyboardButton("❓ Не знаю", callback_data="pro_sex:unknown")],
+            [InlineKeyboardButton(BTN_SEX_MALE, callback_data="pro_sex:male")],
+            [InlineKeyboardButton(BTN_SEX_FEMALE, callback_data="pro_sex:female")],
+            [InlineKeyboardButton(BTN_UNKNOWN, callback_data="pro_sex:unknown")],
         ]
     )
 
@@ -96,9 +131,9 @@ def build_sex_keyboard() -> InlineKeyboardMarkup:
 def build_weight_mode_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("⚖️ Ввести вес (кг)", callback_data="pro_weight_mode:kg")],
-            [InlineKeyboardButton("📏 Оценить на глаз", callback_data="pro_weight_mode:bcs")],
-            [InlineKeyboardButton("⏭ Пропустить", callback_data="pro_weight_mode:skip")],
+            [InlineKeyboardButton(BTN_WEIGHT_KG, callback_data="pro_weight_mode:kg")],
+            [InlineKeyboardButton(BTN_WEIGHT_BCS, callback_data="pro_weight_mode:bcs")],
+            [InlineKeyboardButton(BTN_SKIP, callback_data="pro_weight_mode:skip")],
         ]
     )
 
@@ -110,7 +145,7 @@ def build_bcs_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("норм", callback_data="pro_bcs:normal")],
             [InlineKeyboardButton("полный", callback_data="pro_bcs:overweight")],
             [InlineKeyboardButton("не знаю", callback_data="pro_bcs:unknown")],
-            [InlineKeyboardButton("⏭ Пропустить", callback_data="pro_bcs:skip")],
+            [InlineKeyboardButton(BTN_SKIP, callback_data="pro_bcs:skip")],
         ]
     )
 
@@ -118,8 +153,8 @@ def build_bcs_keyboard() -> InlineKeyboardMarkup:
 def build_after_bcs_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("⚖️ Ввести кг", callback_data="pro_after_bcs:kg")],
-            [InlineKeyboardButton("⏭ Пропустить", callback_data="pro_after_bcs:skip")],
+            [InlineKeyboardButton(BTN_WEIGHT_KG_SHORT, callback_data="pro_after_bcs:kg")],
+            [InlineKeyboardButton(BTN_SKIP, callback_data="pro_after_bcs:skip")],
         ]
     )
 
@@ -127,14 +162,14 @@ def build_after_bcs_keyboard() -> InlineKeyboardMarkup:
 def build_post_menu_keyboard(include_save: bool = False) -> InlineKeyboardMarkup:
     rows = []
     if include_save:
-        rows.append([InlineKeyboardButton("💾 Сохранить изменения", callback_data="pro_save_profile")])
+        rows.append([InlineKeyboardButton(BTN_SAVE_CHANGES, callback_data="pro_save_profile")])
     rows.extend(
         [
-            [InlineKeyboardButton("✅ Вернуться к вопросу", callback_data="pro_post:continue")],
-            [InlineKeyboardButton("📝 Изменить базовые данные", callback_data="pro_edit_basic")],
-            [InlineKeyboardButton("🩺 Особенности здоровья", callback_data="pro_post:health")],
-            [InlineKeyboardButton("💉 Прививки/паразиты", callback_data="pro_post:vaccines")],
-            [InlineKeyboardButton("📝 Важное о питомце", callback_data="pro_post:note")],
+            [InlineKeyboardButton(BTN_RETURN_TO_QUESTION, callback_data="pro_post:continue")],
+            [InlineKeyboardButton(BTN_EDIT_BASIC, callback_data="pro_edit_basic")],
+            [InlineKeyboardButton(BTN_HEALTH_FEATURES, callback_data="pro_post:health")],
+            [InlineKeyboardButton(BTN_VACCINES_PREVENTION, callback_data="pro_post:vaccines")],
+            [InlineKeyboardButton(BTN_IMPORTANT, callback_data="pro_post:note")],
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -143,10 +178,10 @@ def build_post_menu_keyboard(include_save: bool = False) -> InlineKeyboardMarkup
 def build_mode_keyboard(pet_type: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🚑 Скорая помощь", callback_data=f"{pet_type}_emergency")],
-            [InlineKeyboardButton("🍖 Питание и уход", callback_data=f"{pet_type}_care")],
-            [InlineKeyboardButton("💉 Прививки и профилактика", callback_data=f"{pet_type}_vaccines")],
-            [InlineKeyboardButton("🏠 В главное меню", callback_data="back_to_main")],
+            [InlineKeyboardButton(BTN_EMERGENCY, callback_data=f"{pet_type}_emergency")],
+            [InlineKeyboardButton(BTN_CARE, callback_data=f"{pet_type}_care")],
+            [InlineKeyboardButton(BTN_VACCINES, callback_data=f"{pet_type}_vaccines")],
+            [InlineKeyboardButton(BTN_HOME, callback_data="back_to_main")],
         ]
     )
 
@@ -154,13 +189,13 @@ def build_mode_keyboard(pet_type: str) -> InlineKeyboardMarkup:
 def build_health_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🧴 Кожа/шерсть", callback_data="pro_health:skin_coat")],
-            [InlineKeyboardButton("🍽 ЖКТ/питание", callback_data="pro_health:gi")],
-            [InlineKeyboardButton("🌾 Аллергии/реакции", callback_data="pro_health:allergy")],
-            [InlineKeyboardButton("🦴 Опорно-двигательное", callback_data="pro_health:mobility")],
-            [InlineKeyboardButton("📝 Другое", callback_data="pro_health:other")],
-            [InlineKeyboardButton("⏭ Пропустить", callback_data="pro_health:skip")],
-            [InlineKeyboardButton("✅ Готово", callback_data="pro_health:done")],
+            [InlineKeyboardButton(BTN_HEALTH_SKIN, callback_data="pro_health:skin_coat")],
+            [InlineKeyboardButton(BTN_HEALTH_GI, callback_data="pro_health:gi")],
+            [InlineKeyboardButton(BTN_HEALTH_ALLERGY, callback_data="pro_health:allergy")],
+            [InlineKeyboardButton(BTN_HEALTH_MOBILITY, callback_data="pro_health:mobility")],
+            [InlineKeyboardButton(BTN_HEALTH_OTHER, callback_data="pro_health:other")],
+            [InlineKeyboardButton(BTN_SKIP, callback_data="pro_health:skip")],
+            [InlineKeyboardButton(BTN_DONE, callback_data="pro_health:done")],
         ]
     )
 
@@ -168,10 +203,10 @@ def build_health_keyboard() -> InlineKeyboardMarkup:
 def build_vax_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💉 Делались по возрасту", callback_data="pro_vax:done")],
-            [InlineKeyboardButton("⚠️ Частично", callback_data="pro_vax:partial")],
-            [InlineKeyboardButton("❓ Не знаю", callback_data="pro_vax:unknown")],
-            [InlineKeyboardButton("⏭ Пропустить", callback_data="pro_vax:skip")],
+            [InlineKeyboardButton(BTN_VAX_DONE, callback_data="pro_vax:done")],
+            [InlineKeyboardButton(BTN_VAX_PARTIAL, callback_data="pro_vax:partial")],
+            [InlineKeyboardButton(BTN_UNKNOWN, callback_data="pro_vax:unknown")],
+            [InlineKeyboardButton(BTN_SKIP, callback_data="pro_vax:skip")],
         ]
     )
 
@@ -179,10 +214,10 @@ def build_vax_keyboard() -> InlineKeyboardMarkup:
 def build_parasites_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🟢 Регулярно", callback_data="pro_par:regular")],
-            [InlineKeyboardButton("🟡 Нерегулярно", callback_data="pro_par:irregular")],
-            [InlineKeyboardButton("❓ Не знаю", callback_data="pro_par:unknown")],
-            [InlineKeyboardButton("⏭ Пропустить", callback_data="pro_par:skip")],
+            [InlineKeyboardButton(BTN_PARASITES_REGULAR, callback_data="pro_par:regular")],
+            [InlineKeyboardButton(BTN_PARASITES_IRREGULAR, callback_data="pro_par:irregular")],
+            [InlineKeyboardButton(BTN_UNKNOWN, callback_data="pro_par:unknown")],
+            [InlineKeyboardButton(BTN_SKIP, callback_data="pro_par:skip")],
         ]
     )
 
@@ -206,7 +241,7 @@ def get_pro_prompt_and_keyboard(user_id: int, step: str) -> tuple[str, InlineKey
             return (
                 f"{title}\n\n"
                 "Изменения внесены и ждут подтверждения.\n"
-                "Нажмите «💾 Сохранить изменения», чтобы обновить данные в базе, или продолжайте редактирование.\n\n"
+                f"Нажмите «{BTN_SAVE_CHANGES}», чтобы обновить данные в базе, или продолжайте редактирование.\n\n"
                 "Вы также всегда можете вернуться к вопросу.",
                 build_post_menu_keyboard(include_save=True),
             )
@@ -472,15 +507,33 @@ async def handle_save_profile(
         return
     await callback_query.answer()
     set_profile_saving(user_id, True)
-    profile = get_pet_profile(user_id) or {}
+    # 1) Берём профиль из state (pet_profile) или fallback из pro_profile
+    profile = get_pet_profile(user_id) or get_pro_profile(user_id) or {}
     if not isinstance(profile, dict):
         profile = {}
+
+    # 2) Fallback type из species (если вдруг)
     if not profile.get("type") and profile.get("species"):
         profile["type"] = profile["species"]
+
+    # 3) Если type всё ещё нет — пробуем подтянуть активного питомца из backend
+    if not profile.get("type"):
+        try:
+            active = await asyncio.to_thread(get_active_pet, user_id)
+            if isinstance(active, dict):
+                active_type = active.get("type")
+                if active_type:
+                    profile["type"] = active_type
+                    # сохраняем обратно, чтобы дальше не терялось
+                    set_pet_profile(user_id, profile)
+                    set_pet_profile_loaded(user_id, True)
+        except Exception:
+            pass
+
     if not profile.get("type"):
         set_profile_saving(user_id, False)
         await callback_query.message.reply_text(
-            "Не удалось сохранить: не вижу тип питомца. Откройте «⭐ Мой питомец» и попробуйте снова."
+            f"Не удалось сохранить: не вижу тип питомца. Откройте «{BTN_MY_PET}» и попробуйте снова."
         )
         return
 

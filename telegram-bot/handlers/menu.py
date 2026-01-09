@@ -5,16 +5,30 @@ from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from services.backend_client import get_active_pet
 from services.state import set_pet_profile, set_pet_profile_loaded
+from ui.labels import (
+    BTN_DOG,
+    BTN_CAT,
+    BTN_OTHER,
+    BTN_MY_PET,
+    BTN_HOW_IT_WORKS,
+    BTN_HOME,
+    BTN_EMERGENCY,
+    BTN_CARE,
+    BTN_VACCINES,
+    BTN_ASK_QUESTION,
+    BTN_UPDATE_PROFILE,
+    BTN_FILL_FORM,
+)
 
 def setup_menu_handlers(app: Client):
 
     def build_main_menu() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🐶 Собака", callback_data="pet_dog")],
-            [InlineKeyboardButton("🐱 Кошка", callback_data="pet_cat")],
-            [InlineKeyboardButton("🐾 Другое", callback_data="pet_other")],
-            [InlineKeyboardButton("⭐ Мой питомец", callback_data="my_pet")],
-            [InlineKeyboardButton("ℹ️ Как это работает / Тарифы", callback_data="how_it_works")]
+            [InlineKeyboardButton(BTN_DOG, callback_data="pet_dog")],
+            [InlineKeyboardButton(BTN_CAT, callback_data="pet_cat")],
+            [InlineKeyboardButton(BTN_OTHER, callback_data="pet_other")],
+            [InlineKeyboardButton(BTN_MY_PET, callback_data="my_pet")],
+            [InlineKeyboardButton(BTN_HOW_IT_WORKS, callback_data="how_it_works")]
         ])
 
     @app.on_callback_query(filters.regex("^pet_(dog|cat|other)$"))
@@ -22,13 +36,14 @@ def setup_menu_handlers(app: Client):
         await callback_query.answer()
         pet_type = callback_query.data.split("_")[1]  # dog, cat, other
 
+        pet_label = BTN_DOG if pet_type == "dog" else BTN_CAT if pet_type == "cat" else BTN_OTHER
         await callback_query.message.edit_text(
-            f"Вы выбрали: {'?? Собака' if pet_type == 'dog' else '?? Кошка' if pet_type == 'cat' else '?? Другой'}\n\nЧто вас интересует?",
+            f"Вы выбрали: {pet_label}\n\nЧто вас интересует?",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🚑 Скорая помощь", callback_data=f"{pet_type}_emergency")],
-                [InlineKeyboardButton("🍖 Питание и уход", callback_data=f"{pet_type}_care")],
-                [InlineKeyboardButton("💉 Прививки и профилактика", callback_data=f"{pet_type}_vaccines")],
-                [InlineKeyboardButton("🏠 В главное меню", callback_data="back_to_main")]
+                [InlineKeyboardButton(BTN_EMERGENCY, callback_data=f"{pet_type}_emergency")],
+                [InlineKeyboardButton(BTN_CARE, callback_data=f"{pet_type}_care")],
+                [InlineKeyboardButton(BTN_VACCINES, callback_data=f"{pet_type}_vaccines")],
+                [InlineKeyboardButton(BTN_HOME, callback_data="back_to_main")]
             ])
         )
 
@@ -36,13 +51,13 @@ def setup_menu_handlers(app: Client):
     async def how_it_works(client: Client, callback_query: CallbackQuery):
         await callback_query.answer()
         await callback_query.message.edit_text(
-            "?? Как это работает\n\n"
-            "?? Free: я не запоминаю питомца между сессиями. Для точного ответа важно "
+            "ℹ️ Как это работает\n\n"
+            "🆓 Free: я не запоминаю питомца между сессиями. Для точного ответа важно "
             "описывать питомца в сообщении.\n\n"
-            "?? Pro: можно заполнить профиль питомца один раз — и я буду учитывать его в ответах.\n\n"
-            "? Кнопка «Мой питомец» — просмотр/обновление профиля.",
+            "💎 Pro: можно заполнить профиль питомца один раз — и я буду учитывать его в ответах.\n\n"
+            "⭐ Кнопка «Мой питомец» — просмотр/обновление профиля.",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("?? В меню", callback_data="back_to_main")]
+                [InlineKeyboardButton(BTN_HOME, callback_data="back_to_main")]
             ])
         )
 
@@ -56,7 +71,7 @@ def setup_menu_handlers(app: Client):
 
         if pet_profile:
             name = pet_profile.get("name")
-            text = "?? Я помню вашего питомца"
+            text = "⭐ Я помню вашего питомца"
             if name:
                 text = f"{text} {name}"
             if user_id is not None:
@@ -74,9 +89,9 @@ def setup_menu_handlers(app: Client):
             await callback_query.message.edit_text(
                 text,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("❓ Задать вопрос", callback_data="pet_profile_ask")],
-                    [InlineKeyboardButton("✏️ Обновить профиль", callback_data="pet_profile_update")],
-                    [InlineKeyboardButton("🏠 В меню", callback_data="back_to_main")]
+                    [InlineKeyboardButton(BTN_ASK_QUESTION, callback_data="pet_profile_ask")],
+                    [InlineKeyboardButton(BTN_UPDATE_PROFILE, callback_data="pet_profile_update")],
+                    [InlineKeyboardButton(BTN_HOME, callback_data="back_to_main")]
                 ])
             )
             return
@@ -84,8 +99,8 @@ def setup_menu_handlers(app: Client):
         await callback_query.message.edit_text(
             "Профиль питомца ещё не заполнен. Хотите заполнить сейчас?",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✍️ Заполнить анкету", callback_data="pet_profile_update")],
-                [InlineKeyboardButton("🏠 В меню", callback_data="back_to_main")]
+                [InlineKeyboardButton(BTN_FILL_FORM, callback_data="pet_profile_update")],
+                [InlineKeyboardButton(BTN_HOME, callback_data="back_to_main")]
             ])
         )
 
@@ -93,7 +108,7 @@ def setup_menu_handlers(app: Client):
     async def back_to_main(client: Client, callback_query: CallbackQuery):
         await callback_query.answer()
         await callback_query.message.edit_text(
-            "Привет! ?? Я - ХвостоСовет, твой помощник по заботе о питомце.\n\n"
+            "Привет! 🐾 Я - ХвостоСовет, твой помощник по заботе о питомце.\n\n"
             "Выберите, кто ваш питомец:\n\n"
             "Или откройте «Мой питомец», чтобы управлять профилем.",
             reply_markup=build_main_menu()

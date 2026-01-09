@@ -15,6 +15,7 @@ from flows.pro_flow import (
     handle_pro_text_step,
 )
 from services.backend_client import ask_backend
+from ui.labels import BTN_DOG, BTN_CAT, BTN_OTHER
 from services.state import (
     get_profile,
     get_pro_profile,
@@ -54,9 +55,9 @@ def normalize_mode(value: str | None) -> str:
 def build_pet_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🐶 Собака", callback_data="pet_dog")],
-            [InlineKeyboardButton("🐱 Кошка", callback_data="pet_cat")],
-            [InlineKeyboardButton("🐾 Другое", callback_data="pet_other")],
+            [InlineKeyboardButton(BTN_DOG, callback_data="pet_dog")],
+            [InlineKeyboardButton(BTN_CAT, callback_data="pet_cat")],
+            [InlineKeyboardButton(BTN_OTHER, callback_data="pet_other")],
         ]
     )
 
