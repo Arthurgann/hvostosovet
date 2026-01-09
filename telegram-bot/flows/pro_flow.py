@@ -14,6 +14,8 @@ from ui.labels import (
     BTN_OTHER,
     BTN_SEX_MALE,
     BTN_SEX_FEMALE,
+    BTN_YES,
+    BTN_NO,
     BTN_UNKNOWN,
     BTN_WEIGHT_KG,
     BTN_WEIGHT_BCS,
@@ -71,6 +73,7 @@ from services.state import (
     PRO_STEP_NAME,
     PRO_STEP_AGE,
     PRO_STEP_SEX,
+    PRO_STEP_STERILIZED,
     PRO_STEP_BREED,
     PRO_STEP_WEIGHT_MODE,
     PRO_STEP_WEIGHT_KG,
@@ -82,6 +85,8 @@ from services.state import (
     PRO_STEP_HEALTH_NOTE,
     PRO_STEP_VACCINES,
     PRO_STEP_PARASITES,
+    PRO_STEP_VACCINES_DETAILS,
+    PRO_STEP_PARASITES_DETAILS,
     PRO_STEP_OWNER_NOTE,
 )
 
@@ -124,6 +129,17 @@ def build_sex_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(BTN_SEX_MALE, callback_data="pro_sex:male")],
             [InlineKeyboardButton(BTN_SEX_FEMALE, callback_data="pro_sex:female")],
             [InlineKeyboardButton(BTN_UNKNOWN, callback_data="pro_sex:unknown")],
+        ]
+    )
+
+
+def build_sterilized_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(BTN_YES, callback_data="pro_sterilized:yes")],
+            [InlineKeyboardButton(BTN_NO, callback_data="pro_sterilized:no")],
+            [InlineKeyboardButton(BTN_UNKNOWN, callback_data="pro_sterilized:unknown")],
+            [InlineKeyboardButton(BTN_SKIP, callback_data="pro_sterilized:skip")],
         ]
     )
 
@@ -222,11 +238,29 @@ def build_parasites_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def build_vax_details_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(BTN_SKIP, callback_data="pro_vax_details:skip")],
+        ]
+    )
+
+
+def build_parasites_details_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(BTN_SKIP, callback_data="pro_par_details:skip")],
+        ]
+    )
+
+
 def get_pro_prompt_and_keyboard(user_id: int, step: str) -> tuple[str, InlineKeyboardMarkup] | None:
     if step == PRO_STEP_SPECIES:
         return "Кто у вас?", build_species_keyboard()
     if step == PRO_STEP_SEX:
         return "Пол питомца:", build_sex_keyboard()
+    if step == PRO_STEP_STERILIZED:
+        return "Стерилизован/кастрирован?", build_sterilized_keyboard()
     if step == PRO_STEP_WEIGHT_MODE:
         return "Вес питомца (опционально). Что удобнее?", build_weight_mode_keyboard()
     if step == PRO_STEP_WEIGHT_BCS:
@@ -466,6 +500,17 @@ async def handle_pro_callbacks(
     if data.startswith("pro_sex:"):
         value = data.split(":", 1)[1]
         set_profile_field(user_id, "sex", value)
+        set_pro_step(user_id, PRO_STEP_STERILIZED, True)
+        await callback_query.message.reply(
+            "Стерилизован/кастрирован?",
+            reply_markup=build_sterilized_keyboard(),
+        )
+        return
+
+    if data.startswith("pro_sterilized:"):
+        value = data.split(":", 1)[1]
+        if value != "skip":
+            set_profile_field(user_id, "sterilized_status", value)
         set_pro_step(user_id, PRO_STEP_BREED, False)
         await callback_query.message.reply(
             "Порода питомца? Можно: йорк / метис / не знаю"
@@ -571,27 +616,43 @@ async def handle_pro_callbacks(
 
     if data.startswith("pro_vax:"):
         value = data.split(":", 1)[1]
-        if value == "skip":
-            set_profile_field(user_id, "vaccines", None)
-        else:
+        if value != "skip":
             set_profile_field(user_id, "vaccines.status", value)
         set_profile_dirty(user_id, True)
-        set_pro_step(user_id, PRO_STEP_PARASITES, True)
+        set_pro_step(user_id, PRO_STEP_VACCINES_DETAILS, False)
         await callback_query.message.reply(
-            "Обработка от паразитов:",
-            reply_markup=build_parasites_keyboard(),
+            "Дополнительно (по желанию): какие прививки используете и как часто (без дат).",
+            reply_markup=build_vax_details_keyboard(),
         )
         return
 
     if data.startswith("pro_par:"):
         value = data.split(":", 1)[1]
-        if value == "skip":
-            set_profile_field(user_id, "parasites", None)
-        else:
+        if value != "skip":
             set_profile_field(user_id, "parasites.status", value)
         set_profile_dirty(user_id, True)
-        set_pro_step(user_id, PRO_STEP_POST_MENU, True)
-        await show_post_menu(callback_query.message, user_id)
+        set_pro_step(user_id, PRO_STEP_PARASITES_DETAILS, False)
+        await callback_query.message.reply(
+            "Дополнительно (по желанию): какие средства от паразитов используете и как часто (без дат).",
+            reply_markup=build_parasites_details_keyboard(),
+        )
+        return
+
+    if data.startswith("pro_vax_details:"):
+        value = data.split(":", 1)[1]
+        if value == "skip":
+            set_pro_step(user_id, PRO_STEP_PARASITES, True)
+            await callback_query.message.reply(
+                "Обработка от паразитов:",
+                reply_markup=build_parasites_keyboard(),
+            )
+        return
+
+    if data.startswith("pro_par_details:"):
+        value = data.split(":", 1)[1]
+        if value == "skip":
+            set_pro_step(user_id, PRO_STEP_POST_MENU, True)
+            await show_post_menu(callback_query.message, user_id)
         return
 
 
@@ -710,6 +771,44 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
         note = message.text.strip()
         if note.lower() not in ("пропустить", "/skip"):
             set_owner_note(user_id, note)
+            set_profile_dirty(user_id, True)
+        set_pro_step(user_id, PRO_STEP_POST_MENU, True)
+        await show_post_menu(message, user_id)
+        return True
+
+    if pro_step == PRO_STEP_VACCINES_DETAILS:
+        details = message.text.strip()
+        if details.lower() in ("пропустить", "/skip"):
+            set_pro_step(user_id, PRO_STEP_PARASITES, True)
+            await message.reply(
+                "Обработка от паразитов:",
+                reply_markup=build_parasites_keyboard(),
+            )
+            return True
+        if len(details) > 800:
+            await message.reply("Слишком длинно (до 800 символов). Пожалуйста, сократите.")
+            return True
+        if details:
+            set_profile_field(user_id, "vaccines.details", details)
+            set_profile_dirty(user_id, True)
+        set_pro_step(user_id, PRO_STEP_PARASITES, True)
+        await message.reply(
+            "Обработка от паразитов:",
+            reply_markup=build_parasites_keyboard(),
+        )
+        return True
+
+    if pro_step == PRO_STEP_PARASITES_DETAILS:
+        details = message.text.strip()
+        if details.lower() in ("пропустить", "/skip"):
+            set_pro_step(user_id, PRO_STEP_POST_MENU, True)
+            await show_post_menu(message, user_id)
+            return True
+        if len(details) > 800:
+            await message.reply("Слишком длинно (до 800 символов). Пожалуйста, сократите.")
+            return True
+        if details:
+            set_profile_field(user_id, "parasites.details", details)
             set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_POST_MENU, True)
         await show_post_menu(message, user_id)
