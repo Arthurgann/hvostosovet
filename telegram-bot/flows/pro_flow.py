@@ -355,7 +355,6 @@ async def handle_pro_callbacks(
 
     if data.startswith("pro_species:"):
         value = data.split(":", 1)[1]
-        set_profile_field(user_id, "species", value)
         set_profile_field(user_id, "type", value)
         set_pro_step(user_id, PRO_STEP_NAME, False)
         await callback_query.message.reply("Как зовут питомца? (можно пропустить)")
@@ -537,6 +536,8 @@ async def handle_save_profile(
         )
         return
 
+    profile.pop("species", None)
+
     base_url = os.getenv("BACKEND_BASE_URL", "")
     token = os.getenv("BOT_BACKEND_TOKEN", "")
     request_id = str(uuid.uuid4())
@@ -668,8 +669,11 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
             set_health_note(user_id, tag, message.text.strip())
             set_profile_dirty(user_id, True)
         set_health_category(user_id, None)
-        set_pro_step(user_id, PRO_STEP_POST_MENU, True)
-        await show_post_menu(message, user_id)
+        set_pro_step(user_id, PRO_STEP_HEALTH_PICK, True)
+        await message.reply(
+            "Особенности (если известно). Выберите пункт или нажмите Пропустить.",
+            reply_markup=build_health_keyboard(),
+        )
         return True
 
     if pro_step == PRO_STEP_OWNER_NOTE:
