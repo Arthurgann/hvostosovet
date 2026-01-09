@@ -109,7 +109,11 @@ def is_user_pro(last_limits: dict | None) -> bool:
 def is_pro_profile_complete(profile: dict) -> bool:
     if not isinstance(profile, dict):
         return False
-    required = ("species", "age_text", "sex", "breed")
+    pet_type = profile.get("type") or profile.get("species")
+    if pet_type == "other":
+        required = ("species", "age_text", "sex", "animal_kind")
+    else:
+        required = ("species", "age_text", "sex", "breed")
     return all(profile.get(key) for key in required)
 
 
@@ -512,6 +516,13 @@ async def handle_pro_callbacks(
         if value != "skip":
             set_profile_field(user_id, "sterilized_status", value)
         set_pro_step(user_id, PRO_STEP_BREED, False)
+        profile = get_pro_profile(user_id)
+        pet_type = (profile.get("type") if isinstance(profile, dict) else None) or profile.get("species")
+        if pet_type == "other":
+            await callback_query.message.reply(
+                "Какое у вас животное? (например: попугай корелла, шиншилла, хорёк, ящерица, черепаха…)"
+            )
+            return
         await callback_query.message.reply(
             "Порода питомца? Можно: йорк / метис / не знаю"
         )
@@ -719,7 +730,12 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
         return True
 
     if pro_step == PRO_STEP_BREED:
-        set_profile_field(user_id, "breed", message.text.strip())
+        profile = get_pro_profile(user_id)
+        pet_type = (profile.get("type") if isinstance(profile, dict) else None) or profile.get("species")
+        if pet_type == "other":
+            set_profile_field(user_id, "animal_kind", message.text.strip())
+        else:
+            set_profile_field(user_id, "breed", message.text.strip())
         set_pro_step(user_id, PRO_STEP_WEIGHT_MODE, True)
         await message.reply(
             "Вес питомца (опционально). Что удобнее?",
