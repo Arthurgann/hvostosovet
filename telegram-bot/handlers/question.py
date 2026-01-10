@@ -149,7 +149,8 @@ async def send_backend_response(
         print(
             "[BACKEND] calling /v1/chat/ask "
             f"user_id={user_id} rid={request_id} "
-            f"has_profile={bool(pro_profile)} has_pet_profile={bool(pet_profile_to_send)} text_len={len(summary)}"
+            f"has_profile={bool(profile)} has_pro_profile={bool(pro_profile)} "
+            f"has_pet_profile={bool(pet_profile_to_send)} text_len={len(summary)}"
         )
         result = await asyncio.to_thread(
             ask_backend,
@@ -234,6 +235,7 @@ def setup_question_handlers(app: Client):
     async def handle_skip_basic_info(client_tg: Client, callback_query: CallbackQuery):
         await callback_query.answer()
         user_id = callback_query.from_user.id
+        set_profile_field(user_id, "step", "question")
         set_waiting_question(user_id)
         profile = get_profile(user_id)
         context = (profile.get("context") or profile.get("current_mode")) if profile else None
