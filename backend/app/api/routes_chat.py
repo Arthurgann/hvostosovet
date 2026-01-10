@@ -787,6 +787,11 @@ def pets_active_save(
                 )
 
             result = {"ok": True, "pet_id": str(pet_id) if pet_id is not None else None}
+            logger.info(
+                "PETS_ACTIVE_SAVE ok=True user_id=%s pet_id=%s",
+                telegram_user_id,
+                result.get("pet_id"),
+            )
             cur.execute(
                 "update request_dedup "
                 "set status = 'done', response_json = %s, finished_at = now() "
