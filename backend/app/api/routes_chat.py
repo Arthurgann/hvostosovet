@@ -123,6 +123,22 @@ def build_pet_dict_from_row(active_pet_row) -> dict:
     return merged
 
 
+_PET_SERVICE_KEYS = {"step", "context", "current_mode", "question"}
+
+
+def normalize_pet_dict(pet_dict: dict | None) -> dict | None:
+    if not isinstance(pet_dict, dict):
+        return None
+    return {k: v for k, v in pet_dict.items() if k not in _PET_SERVICE_KEYS}
+
+
+def is_minimal_pet_profile(pet_dict: dict | None) -> bool:
+    if not isinstance(pet_dict, dict) or not pet_dict:
+        return True
+    keys_without_type = [k for k in pet_dict.keys() if k != "type"]
+    return not keys_without_type
+
+
 def upsert_active_pet(cur, user_id, pet_dict):
     pet_dict = pet_dict or {}
     active_pet = get_active_pet(cur, user_id)
@@ -256,7 +272,7 @@ def chat_ask(
             window_end = window_start + timedelta(days=1)
 
             telegram_user_id = payload.user.telegram_user_id
-            pet_dict = payload.pet_profile or payload.pet
+            pet_dict = normalize_pet_dict(payload.pet_profile or payload.pet)
             pet_dict_for_upsert = pet_dict
             if pet_dict_for_upsert is not None and not pet_dict_for_upsert.get("type"):
                 logger.warning(
@@ -521,16 +537,26 @@ def chat_ask(
                 )
                 return result
             # --- END SPECIAL ---
-            effective_pet_profile = pet_dict or None
-            if not effective_pet_profile and user_id:
-                active_pet = get_active_pet(cur, user_id)
-                if active_pet:
-                    effective_pet_profile = active_pet[8] or None
+            effective_pet_profile = None
+            pet_profile_source = "none"
+            if not is_minimal_pet_profile(pet_dict):
+                effective_pet_profile = pet_dict
+                pet_profile_source = "request"
+            else:
+                if user_plan == "pro" and user_id:
+                    active_pet = get_active_pet(cur, user_id)
+                    if active_pet:
+                        effective_pet_profile = build_pet_dict_from_row(active_pet)
+                        pet_profile_source = "db"
+                if effective_pet_profile is None:
+                    effective_pet_profile = pet_dict or None
+                    pet_profile_source = "request" if pet_dict else "none"
             if isinstance(effective_pet_profile, str):
                 try:
                     effective_pet_profile = json.loads(effective_pet_profile)
                 except json.JSONDecodeError:
                     effective_pet_profile = None
+                    pet_profile_source = "none"
             has_effective_pet_profile = bool(effective_pet_profile)
             pet_profile_keys = (
                 list(effective_pet_profile.keys())
@@ -538,7 +564,8 @@ def chat_ask(
                 else None
             )
             logger.info(
-                "CHAT_PET_PROFILE has_effective_pet_profile=%s keys=%s",
+                "CHAT_PET_PROFILE source=%s has_effective_pet_profile=%s keys=%s",
+                pet_profile_source,
                 has_effective_pet_profile,
                 pet_profile_keys,
             )
