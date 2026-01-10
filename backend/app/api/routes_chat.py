@@ -425,6 +425,7 @@ def chat_ask(
 
             effective_pet_profile = None
             pet_profile_source = "none"
+            pet_profile_pet_id = None
             if not is_minimal_pet_profile(pet_dict):
                 effective_pet_profile = pet_dict
                 pet_profile_source = "request"
@@ -434,7 +435,12 @@ def chat_ask(
                     if active_pet:
                         effective_pet_profile = build_pet_dict_from_row(active_pet)
                         pet_profile_source = "db"
-                if effective_pet_profile is None:
+                        pet_profile_pet_id = (
+                            str(active_pet[0]) if active_pet[0] is not None else None
+                        )
+                elif effective_pet_profile is None and user_plan == "pro":
+                    pet_profile_source = "none"
+                if effective_pet_profile is None and user_plan != "pro":
                     effective_pet_profile = pet_dict or None
                     pet_profile_source = "request" if pet_dict else "none"
             if isinstance(effective_pet_profile, str):
@@ -595,6 +601,10 @@ def chat_ask(
                 },
                 "upsell": {"show": False, "reason": None, "cta": None},
                 "research": {"used_this_period": 0, "limit": 0, "reset_at": None},
+                "meta": {
+                    "pet_profile_source": pet_profile_source,
+                    "pet_profile_pet_id": pet_profile_pet_id,
+                },
             }
 
             try:

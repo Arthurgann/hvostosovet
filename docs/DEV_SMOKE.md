@@ -152,6 +152,31 @@ Invoke-RestMethod `
 
 ---
 
+## 4.3) Minimal profile contract (Free/Pro)
+
+Подготовка планов в Supabase:
+- выставь `users.plan` как `free` и `pro` (см. SQL в разделе "Переключение Free / Pro для локальных тестов")
+- понадобятся два `telegram_user_id`: один с `plan='free'`, второй с `plan='pro'`
+
+Подготовка Pro-юзера:
+- один раз вызвать `/v1/pets/active/save`, чтобы в БД был активный питомец
+
+Запуск скрипта:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+$env:BOT_BACKEND_TOKEN="..."
+$env:TG_FREE="123456"
+$env:TG_PRO="234567"
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke_min_profile_contract.ps1
+```
+
+Ожидаемый результат:
+- `OK: minimal profile contract`
+
+---
+
 
 ## 5) Если что-то не работает
 
