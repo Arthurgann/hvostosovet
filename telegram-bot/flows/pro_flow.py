@@ -1,11 +1,10 @@
 import asyncio
 import os
 import re
-import uuid
 from pyrogram import Client
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 import config
-from services.backend_client import ask_backend, get_active_pet
+from services.backend_client import save_active_pet_profile, get_active_pet
 from ui.labels import (
     BTN_ASK_QUESTION,
     BTN_UPDATE_PROFILE,
@@ -459,28 +458,19 @@ async def save_profile_now(
 
     profile.pop("species", None)
 
-    base_url = os.getenv("BACKEND_BASE_URL", "")
-    token = os.getenv("BOT_BACKEND_TOKEN", "")
-    request_id = str(uuid.uuid4())
     if config.BOT_DEBUG:
-        print(f"[HTTP] POST /v1/chat/ask save_profile user_id={user_id}")
+        print(f"[HTTP] POST /v1/pets/active/save user_id={user_id}")
     try:
-        await message.reply("⌛️ Сохраняю изменения профиля… Пожалуйста, подождите.")
+        await message.reply("⏳ Сохраняю изменения профиля: Пожалуйста, подождите.")
         result = await asyncio.to_thread(
-            ask_backend,
-            base_url,
-            token,
+            save_active_pet_profile,
             user_id,
-            "__save_profile__",
-            "care",
-            request_id,
-            None,
             profile,
         )
         ok = result.get("ok")
         if config.BOT_DEBUG:
             status = result.get("status")
-            print(f"[BACKEND] save_profile status={status} ok={ok}")
+            print(f"[BACKEND] save_active_pet_profile status={status} ok={ok}")
         if not ok:
             await message.reply("❗ Не удалось сохранить профиль. Попробуйте позже.")
             return False
@@ -490,7 +480,7 @@ async def save_profile_now(
         return True
     except Exception as exc:
         if config.BOT_DEBUG:
-            print(f"[BACKEND] save_profile error user_id={user_id} err={exc}")
+            print(f"[BACKEND] save_active_pet_profile error user_id={user_id} err={exc}")
         await message.reply("❗ Не удалось сохранить профиль. Попробуйте позже.")
         return False
     finally:

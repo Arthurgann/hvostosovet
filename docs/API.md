@@ -55,6 +55,45 @@
 - `429 rate_limited` — превышены лимиты
 - `500 internal_error` — ошибка backend/LLM
 
+Важно: сохранение профиля в `POST /v1/chat/ask` не поддерживается (deprecated).
+Для сохранения анкеты используйте `POST /v1/pets/active/save`.
+
+## POST /v1/pets/active/save
+
+Сохраняет активный профиль питомца (Pro), без вызова LLM и без записи в sessions.
+
+### Headers
+- `Authorization: Bearer <BOT_BACKEND_TOKEN>` (обязательно)
+- `X-Request-Id: <uuid>` (обязательно)
+
+### Request JSON
+```json
+{
+  "user": { "telegram_user_id": 123456789 },
+  "pet_profile": {
+    "type": "dog",
+    "name": "Балу"
+  }
+}
+```
+
+### Response JSON (пример)
+```json
+{
+  "ok": true,
+  "pet_id": "..."
+}
+```
+
+### Errors
+- `400 missing_x_request_id` - отсутствует заголовок `X-Request-Id`
+- `400 invalid_x_request_id` - некорректный `X-Request-Id`
+- `400 invalid_pet_profile` - некорректный `pet_profile`
+- `400 missing_pet_type` - не задан `pet_profile.type`
+- `402 pro_required` - требуется Pro
+- `409 request_in_progress` - запрос уже обрабатывается
+
+
 ### Smoke-проверка (логика режима)
 1) Запрос с `mode=care` → `active.mode` станет `care`
 2) Второй запрос **без** `mode` → `active.mode` останется `care`

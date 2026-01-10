@@ -38,6 +38,11 @@ class ChatAskPayload(BaseModel):
     pet_profile: dict | None = None
 
 
+class SaveActivePetPayload(BaseModel):
+    user: ChatAskUser
+    pet_profile: dict | None = None
+
+
 def deep_merge_dict(base: dict | None, patch: dict | None) -> dict:
     """
     Deep-merge словарей: patch имеет приоритет, base сохраняется.
@@ -174,12 +179,13 @@ def upsert_active_pet(cur, user_id, pet_dict):
                 pet_id,
             ),
         )
-        return
+        return pet_id
 
     cur.execute(
         "insert into pets "
         "(user_id, type, name, sex, birth_date, age_text, breed, profile, created_at, updated_at) "
-        "values (%s, %s, %s, %s, %s, %s, %s, %s, now(), now())",
+        "values (%s, %s, %s, %s, %s, %s, %s, %s, now(), now()) "
+        "returning id",
         (
             user_id,
             pet_type,
@@ -191,6 +197,9 @@ def upsert_active_pet(cur, user_id, pet_dict):
             profile,
         ),
     )
+    row = cur.fetchone()
+    return row[0] if row else None
+
 
 @router.post("/chat/ask", dependencies=[Depends(require_bot_token)])
 def chat_ask(
@@ -273,14 +282,6 @@ def chat_ask(
 
             telegram_user_id = payload.user.telegram_user_id
             pet_dict = normalize_pet_dict(payload.pet_profile or payload.pet)
-            pet_dict_for_upsert = pet_dict
-            if pet_dict_for_upsert is not None and not pet_dict_for_upsert.get("type"):
-                logger.warning(
-                    "Skipping pet upsert: missing pet.type request_id=%s user_id=%s",
-                    x_request_id,
-                    telegram_user_id,
-                )
-                pet_dict_for_upsert = None
             user_id = None
             user_plan = None
             limits_remaining_today = -1
@@ -314,32 +315,6 @@ def chat_ask(
                         "update request_dedup set user_id = %s where request_id = %s and user_id is null",
                         (user_id, x_request_id),
                     )
-                    if user_plan == "pro" and pet_dict_for_upsert is not None:
-                        savepoint_created = False
-                        try:
-                            cur.execute("savepoint pet_upsert")
-                            savepoint_created = True
-                            upsert_active_pet(cur, user_id, pet_dict_for_upsert)
-                        except Exception:
-                            logger.exception(
-                                "Failed to upsert pet profile request_id=%s user_id=%s",
-                                x_request_id,
-                                user_id,
-                            )
-                            if savepoint_created:
-                                try:
-                                    cur.execute("rollback to savepoint pet_upsert")
-                                    cur.execute("release savepoint pet_upsert")
-                                except Exception:
-                                    logger.exception(
-                                        "Failed to rollback pet upsert savepoint request_id=%s user_id=%s",
-                                        x_request_id,
-                                        user_id,
-                                    )
-                        else:
-                            if savepoint_created:
-                                cur.execute("release savepoint pet_upsert")
-
                     cur.execute(
                         "select window_start_at, window_end_at, count, cooldown_until "
                         "from rate_limits where user_id = %s",
@@ -448,95 +423,6 @@ def chat_ask(
                     if daily_limit is not None and count is not None:
                         limits_remaining_today = max(daily_limit - (count + 1), 0)
 
-            # --- SPECIAL: техническое сохранение профиля, без LLM и без sessions ---
-            if payload.text.strip() == "__save_profile__":
-                if user_plan != "pro":
-                    cur.execute(
-                        "update request_dedup "
-                        "set status = 'failed', error_text = 'pro_required', finished_at = now() "
-                        "where request_id = %s",
-                        (x_request_id,),
-                    )
-                    return JSONResponse(
-                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                        content={"ok": False, "error": "pro_required"},
-                    )
-
-                pet_to_save = payload.pet_profile or payload.pet
-                if not isinstance(pet_to_save, dict):
-                    pet_to_save = None
-
-                pet_type = pet_to_save.get("type") if pet_to_save else None
-                if not pet_type:
-                    cur.execute(
-                        "update request_dedup "
-                        "set status = 'failed', error_text = 'missing_pet_type', finished_at = now() "
-                        "where request_id = %s",
-                        (x_request_id,),
-                    )
-                    return JSONResponse(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        content={"ok": False, "error": "missing_pet_type"},
-                    )
-
-                try:
-                    # --- MERGE: восстанавливаем полную базу из pets (колонки + profile) и накладываем patch ---
-                    active_pet = get_active_pet(cur, user_id)
-                    existing_full = build_pet_dict_from_row(active_pet)
-
-                    if pet_to_save is None or not isinstance(pet_to_save, dict):
-                        pet_to_save = {}
-
-                    # deep-merge: patch поверх полного existing
-                    pet_to_save = deep_merge_dict(existing_full, pet_to_save)
-
-                    # гарантируем type
-                    if not pet_to_save.get("type"):
-                        pet_to_save["type"] = pet_type
-                    # --- END MERGE ---
-
-                    cur.execute("savepoint pet_upsert")
-                    upsert_active_pet(cur, user_id, pet_to_save)
-                    cur.execute("release savepoint pet_upsert")
-                except Exception:
-                    logger.exception(
-                        "Failed to upsert pet profile in __save_profile__ request_id=%s user_id=%s",
-                        x_request_id,
-                        user_id,
-                    )
-                    try:
-                        cur.execute("rollback to savepoint pet_upsert")
-                        cur.execute("release savepoint pet_upsert")
-                    except Exception:
-                        pass
-                    cur.execute(
-                        "update request_dedup "
-                        "set status = 'failed', error_text = 'pet_upsert_failed', finished_at = now() "
-                        "where request_id = %s",
-                        (x_request_id,),
-                    )
-                    return JSONResponse(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        content={"ok": False, "error": "pet_upsert_failed"},
-                    )
-
-                result = {
-                    "ok": True,
-                    "saved": True,
-                    "limits": {
-                        "plan": user_plan or "free",
-                        "remaining_today": limits_remaining_today,
-                        "reset_at": limits_reset_at,
-                    },
-                }
-                cur.execute(
-                    "update request_dedup "
-                    "set status = 'done', response_json = %s, finished_at = now() "
-                    "where request_id = %s",
-                    (Json(result), x_request_id),
-                )
-                return result
-            # --- END SPECIAL ---
             effective_pet_profile = None
             pet_profile_source = "none"
             if not is_minimal_pet_profile(pet_dict):
@@ -737,6 +623,177 @@ def pets_upsert():
         status_code=status.HTTP_402_PAYMENT_REQUIRED,
         content={"error": "pro_required"},
     )
+
+
+@router.post("/pets/active/save", dependencies=[Depends(require_bot_token)])
+def pets_active_save(
+    response: Response,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    payload: SaveActivePetPayload = Body(...),
+):
+    if not x_request_id:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "missing_x_request_id"},
+        )
+    try:
+        uuid.UUID(x_request_id)
+    except ValueError:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "invalid_x_request_id"},
+        )
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select status, response_json from request_dedup where request_id = %s",
+                (x_request_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                status_value, response_json = row
+                if status_value == "done":
+                    response.headers["X-Dedup-Hit"] = "1"
+                    if isinstance(response_json, str):
+                        return json.loads(response_json)
+                    return response_json or {}
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={"error": "request_in_progress"},
+                )
+
+            cur.execute(
+                "insert into request_dedup (request_id, user_id, status, created_at, response_json) "
+                "values (%s, null, 'started', now(), null) on conflict do nothing",
+                (x_request_id,),
+            )
+            cur.execute(
+                "select status, response_json from request_dedup where request_id = %s",
+                (x_request_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                status_value, response_json = row
+                if status_value == "done":
+                    response.headers["X-Dedup-Hit"] = "1"
+                    if isinstance(response_json, str):
+                        return json.loads(response_json)
+                    return response_json or {}
+                if status_value != "started":
+                    return JSONResponse(
+                        status_code=status.HTTP_409_CONFLICT,
+                        content={"error": "request_in_progress"},
+                    )
+
+            telegram_user_id = payload.user.telegram_user_id
+            user_id = None
+            user_plan = None
+            if telegram_user_id is not None:
+                cur.execute(
+                    "select id, plan from users where telegram_user_id = %s",
+                    (telegram_user_id,),
+                )
+                user_row = cur.fetchone()
+                if not user_row:
+                    cur.execute(
+                        "insert into users "
+                        "(telegram_user_id, created_at, plan, locale, last_seen_at, "
+                        "research_used, research_limit, research_reset_at) "
+                        "values (%s, now(), 'free', null, null, 0, 2, date_trunc('month', now()) + interval '1 month') "
+                        "on conflict (telegram_user_id) do nothing",
+                        (telegram_user_id,),
+                    )
+                    cur.execute(
+                        "select id, plan from users where telegram_user_id = %s",
+                        (telegram_user_id,),
+                    )
+                    user_row = cur.fetchone()
+                if user_row:
+                    user_id = user_row[0]
+                    user_plan = user_row[1]
+                    cur.execute(
+                        "update request_dedup set user_id = %s where request_id = %s and user_id is null",
+                        (user_id, x_request_id),
+                    )
+
+            if user_plan != "pro":
+                cur.execute(
+                    "update request_dedup "
+                    "set status = 'failed', error_text = 'pro_required', finished_at = now() "
+                    "where request_id = %s",
+                    (x_request_id,),
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    content={"ok": False, "error": "pro_required"},
+                )
+
+            pet_to_save = payload.pet_profile
+            if not isinstance(pet_to_save, dict):
+                cur.execute(
+                    "update request_dedup "
+                    "set status = 'failed', error_text = 'invalid_pet_profile', finished_at = now() "
+                    "where request_id = %s",
+                    (x_request_id,),
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={"ok": False, "error": "invalid_pet_profile"},
+                )
+
+            pet_to_save = normalize_pet_dict(pet_to_save)
+
+            try:
+                active_pet = get_active_pet(cur, user_id)
+                existing_full = build_pet_dict_from_row(active_pet)
+                pet_to_save = deep_merge_dict(existing_full, pet_to_save or {})
+
+                if not pet_to_save.get("type"):
+                    cur.execute(
+                        "update request_dedup "
+                        "set status = 'failed', error_text = 'missing_pet_type', finished_at = now() "
+                        "where request_id = %s",
+                        (x_request_id,),
+                    )
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={"ok": False, "error": "missing_pet_type"},
+                    )
+
+                cur.execute("savepoint pet_upsert")
+                pet_id = upsert_active_pet(cur, user_id, pet_to_save)
+                cur.execute("release savepoint pet_upsert")
+            except Exception:
+                logger.exception(
+                    "Failed to upsert pet profile request_id=%s user_id=%s",
+                    x_request_id,
+                    user_id,
+                )
+                try:
+                    cur.execute("rollback to savepoint pet_upsert")
+                    cur.execute("release savepoint pet_upsert")
+                except Exception:
+                    pass
+                cur.execute(
+                    "update request_dedup "
+                    "set status = 'failed', error_text = 'pet_upsert_failed', finished_at = now() "
+                    "where request_id = %s",
+                    (x_request_id,),
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"ok": False, "error": "pet_upsert_failed"},
+                )
+
+            result = {"ok": True, "pet_id": str(pet_id) if pet_id is not None else None}
+            cur.execute(
+                "update request_dedup "
+                "set status = 'done', response_json = %s, finished_at = now() "
+                "where request_id = %s",
+                (Json(result), x_request_id),
+            )
+            return result
 
 
 @router.get("/pets/active", dependencies=[Depends(require_bot_token)])
