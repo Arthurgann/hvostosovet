@@ -71,6 +71,32 @@ def build_basic_info_keyboard() -> InlineKeyboardMarkup:
 
 
 
+
+def get_question_prompt_text(context: str | None) -> str:
+    mode = normalize_mode(context)
+    if mode == "care":
+        return (
+            "📝 Напишите свой вопрос или опишите, что вас интересует:\n\n"
+            "Пример: подбор корма, режим кормления, уход за шерстью, когтями, ушами, гигиена, "
+            "выбор мисок, лежанок и других аксессуаров."
+        )
+    if mode == "vaccines":
+        return (
+            "📝 Напишите, о чём вы хотите узнать:\n\n"
+            "Пример: график прививок, профилактика глистов, уход за зубами, обработка от блох и клещей, "
+            "стрижка когтей, чистка ушей, обработка глаз."
+        )
+    return "💬 Опишите, что именно беспокоит Вашего питомца, или задайте вопрос:"
+
+
+async def send_question_prompt(message: Message, context: str | None, edit: bool = False) -> None:
+    text = get_question_prompt_text(context)
+    if edit:
+        await message.edit_text(text)
+    else:
+        await message.reply(text)
+
+
 async def send_backend_response(
     client_tg: Client,
     message: Message,
@@ -209,7 +235,9 @@ def setup_question_handlers(app: Client):
         await callback_query.answer()
         user_id = callback_query.from_user.id
         set_waiting_question(user_id)
-        await callback_query.message.edit_text("Ок, задайте ваш вопрос.")
+        profile = get_profile(user_id)
+        context = (profile.get("context") or profile.get("current_mode")) if profile else None
+        await send_question_prompt(callback_query.message, context, edit=True)
 
     @app.on_callback_query(filters.regex("^pet_profile_(ask|update)$"))
     async def handle_pet_profile_actions(client_tg: Client, callback_query: CallbackQuery):
@@ -237,22 +265,7 @@ def setup_question_handlers(app: Client):
         if get_skip_basic_info(user_id):
             set_skip_basic_info(user_id, False)
             set_waiting_question(user_id)
-            if context == "care":
-                await callback_query.message.edit_text(
-                    "💬 Напишите свой вопрос или опишите, что вас интересует:\n\n"
-                    "Пример: подбор корма, режим кормления, уход за шерстью, когтями, ушами, гигиена, "
-                    "выбор мисок, лежанок и других аксессуаров."
-                )
-            elif context == "vaccines":
-                await callback_query.message.edit_text(
-                    "💬 Напишите, о чём вы хотите узнать:\n\n"
-                    "Пример: график прививок, профилактика глистов, уход за зубами, обработка от блох и клещей, "
-                    "стрижка когтей, чистка ушей, обработка глаз."
-                )
-            else:
-                await callback_query.message.edit_text(
-                    "💬 Опишите, что именно беспокоит Вашего питомца, или задайте вопрос:"
-                )
+            await send_question_prompt(callback_query.message, context, edit=True)
             return
 
         if pet_type == "dog":
@@ -349,25 +362,7 @@ def setup_question_handlers(app: Client):
 
             context = normalize_mode(profile.get("context") if profile else None)
 
-            if context == "care":
-                await message.reply(
-                    "📝 Напишите свой вопрос или опишите, что вас интересует:\n\n"
-                    "Пример: подбор корма, режим кормления, уход за шерстью, когтями, ушами, гигиена, "
-                    "выбор мисок, лежанок и других аксессуаров."
-                )
-
-            elif context == "vaccines":
-                await message.reply(
-                    "📝 Напишите, о чём вы хотите узнать:\n\n"
-                    "Пример: график прививок, профилактика глистов, уход за зубами, обработка от блох и клещей, "
-                    "стрижка когтей, чистка ушей, обработка глаз."
-                )
-
-            else:
-                await message.reply(
-                    "💬 Опишите, что именно беспокоит Вашего питомца, или задайте вопрос:"
-                )
-
+            await send_question_prompt(message, context)
         elif step == "pending_details":
             set_basic_info(user_id, message.text)
             pending = get_pending_question(user_id)
