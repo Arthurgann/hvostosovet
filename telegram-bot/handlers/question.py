@@ -15,7 +15,7 @@ from flows.pro_flow import (
     handle_pro_text_step,
 )
 from services.backend_client import ask_backend
-from ui.labels import BTN_DOG, BTN_CAT, BTN_OTHER
+from ui.labels import BTN_DOG, BTN_CAT, BTN_OTHER, BTN_SKIP
 from services.state import (
     get_profile,
     get_pro_profile,
@@ -58,6 +58,14 @@ def build_pet_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(BTN_DOG, callback_data="pet_dog")],
             [InlineKeyboardButton(BTN_CAT, callback_data="pet_cat")],
             [InlineKeyboardButton(BTN_OTHER, callback_data="pet_other")],
+        ]
+    )
+
+
+def build_basic_info_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(BTN_SKIP, callback_data="skip_basic_info")],
         ]
     )
 
@@ -196,6 +204,13 @@ def setup_question_handlers(app: Client):
         await callback_query.answer()
         await callback_query.message.reply("💎 Оформление Pro скоро появится. Спасибо за интерес!")
 
+    @app.on_callback_query(filters.regex("^skip_basic_info$"))
+    async def handle_skip_basic_info(client_tg: Client, callback_query: CallbackQuery):
+        await callback_query.answer()
+        user_id = callback_query.from_user.id
+        set_waiting_question(user_id)
+        await callback_query.message.edit_text("Ок, задайте ваш вопрос.")
+
     @app.on_callback_query(filters.regex("^pet_profile_(ask|update)$"))
     async def handle_pet_profile_actions(client_tg: Client, callback_query: CallbackQuery):
         await handle_pet_profile_actions_flow(client_tg, callback_query, send_backend_response)
@@ -267,6 +282,7 @@ def setup_question_handlers(app: Client):
             intro +
             "🗓 Пожалуйста, укажите информацию о питомце: порода, возраст, пол и особенности образа жизни\n\n"
             f"Пример: {example}",
+            reply_markup=build_basic_info_keyboard(),
             disable_web_page_preview=True
         )
 
