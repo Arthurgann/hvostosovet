@@ -219,6 +219,7 @@ def start_profile(
 ) -> dict:
     existing = _user_profiles.get(user_id) or {}
     pending_question = existing.get("pending_question")
+    pending_action = existing.get("pending_action")
     preserved = {
         "profile": existing.get("profile"),
         "pet_profile": existing.get("pet_profile"),
@@ -232,6 +233,8 @@ def start_profile(
     _user_profiles[user_id] = {"type": pet_type, "context": context, "step": "basic_info"}
     if pending_question:
         _user_profiles[user_id]["pending_question"] = pending_question
+    if pending_action is not None:
+        _user_profiles[user_id]["pending_action"] = pending_action
     if current_mode:
         _user_profiles[user_id]["current_mode"] = current_mode
     for key, value in preserved.items():
@@ -270,6 +273,28 @@ def pop_pending_question(user_id: int) -> str | None:
     if not p:
         return None
     return p.pop("pending_question", None)
+
+def set_pending_action(user_id: int, action: dict) -> None:
+    p = _user_profiles[user_id]
+    p["pending_action"] = action
+
+def get_pending_action(user_id: int) -> dict | None:
+    p = _user_profiles.get(user_id)
+    if not p:
+        return None
+    return p.get("pending_action")
+
+def pop_pending_action(user_id: int) -> dict | None:
+    p = _user_profiles.get(user_id)
+    if not p:
+        return None
+    return p.pop("pending_action", None)
+
+def clear_pending_action(user_id: int) -> None:
+    p = _user_profiles.get(user_id)
+    if not p:
+        return
+    p.pop("pending_action", None)
 
 def clear_profile(user_id: int) -> None:
     _user_profiles.pop(user_id, None)

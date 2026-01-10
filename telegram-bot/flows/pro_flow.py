@@ -22,6 +22,8 @@ from ui.labels import (
     BTN_SKIP,
     BTN_WEIGHT_KG_SHORT,
     BTN_SAVE_CHANGES,
+    BTN_DIRTY_DISCARD,
+    BTN_DIRTY_STAY,
     BTN_RETURN_TO_QUESTION,
     BTN_EDIT_BASIC,
     BTN_HEALTH_FEATURES,
@@ -43,6 +45,7 @@ from ui.labels import (
     BTN_PARASITES_IRREGULAR,
     BTN_MY_PET,
 )
+from ui.main_menu import show_main_menu
 from services.state import (
     get_pro_profile,
     get_pro_step,
@@ -68,6 +71,8 @@ from services.state import (
     set_pro_temp_field,
     add_health_tag,
     pop_pending_question,
+    set_pending_action,
+    pop_pending_action,
     PRO_STEP_NONE,
     PRO_STEP_SPECIES,
     PRO_STEP_NAME,
@@ -193,6 +198,36 @@ def build_post_menu_keyboard(include_save: bool = False) -> InlineKeyboardMarkup
         ]
     )
     return InlineKeyboardMarkup(rows)
+
+
+def build_dirty_guard_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(BTN_SAVE_CHANGES, callback_data="dirty_save")],
+            [InlineKeyboardButton(BTN_DIRTY_DISCARD, callback_data="dirty_discard")],
+            [InlineKeyboardButton(BTN_DIRTY_STAY, callback_data="dirty_stay")],
+        ]
+    )
+
+
+async def show_dirty_guard(message: Message) -> None:
+    await message.reply(
+        "У вас есть несохранённые изменения анкеты. Сохранить перед выходом?",
+        reply_markup=build_dirty_guard_keyboard(),
+    )
+
+
+async def guard_dirty_or_execute(
+    user_id: int,
+    action: dict,
+    message: Message,
+    execute_fn_coroutine,
+) -> None:
+    if not is_profile_dirty(user_id):
+        await execute_fn_coroutine()
+        return
+    set_pending_action(user_id, action)
+    await show_dirty_guard(message)
 
 
 def build_mode_keyboard(pet_type: str) -> InlineKeyboardMarkup:
@@ -358,6 +393,31 @@ async def show_post_menu(message: Message, user_id: int) -> None:
         set_profile_created_shown(user_id, True)
 
 
+async def execute_pending_action(
+    client_tg: Client,
+    message: Message,
+    user_id: int,
+    action: dict | None,
+    send_backend_response_cb,
+) -> None:
+    if not action:
+        await show_post_menu(message, user_id)
+        return
+    action_type = action.get("type")
+    if action_type == "go_question":
+        set_pro_step(user_id, PRO_STEP_NONE, False)
+        pending = pop_pending_question(user_id)
+        if pending:
+            await send_backend_response_cb(client_tg, message, user_id, pending)
+        else:
+            await message.reply("Напишите свой вопрос.")
+        return
+    if action_type == "go_menu":
+        await show_main_menu(message)
+        return
+    await show_post_menu(message, user_id)
+
+
 async def save_profile_now(
     message: Message,
     user_id: int,
@@ -485,9 +545,48 @@ async def handle_pro_callbacks(
     callback_query: CallbackQuery,
     send_backend_response_cb,
 ) -> None:
-    await callback_query.answer()
     user_id = callback_query.from_user.id
     data = callback_query.data or ""
+
+    if data == "dirty_stay":
+        await callback_query.answer()
+        await show_post_menu(callback_query.message, user_id)
+        return
+
+    if data == "dirty_discard":
+        await callback_query.answer()
+        set_profile_dirty(user_id, False)
+        action = pop_pending_action(user_id)
+        await execute_pending_action(
+            client_tg,
+            callback_query.message,
+            user_id,
+            action,
+            send_backend_response_cb,
+        )
+        return
+
+    if data == "dirty_save":
+        if is_profile_saving(user_id):
+            await callback_query.answer("Сохраняю... подождите", show_alert=False)
+            return
+        await callback_query.answer()
+        ok = await save_profile_now(callback_query.message, user_id)
+        if ok:
+            set_profile_dirty(user_id, False)
+            action = pop_pending_action(user_id)
+            await execute_pending_action(
+                client_tg,
+                callback_query.message,
+                user_id,
+                action,
+                send_backend_response_cb,
+            )
+        else:
+            await show_post_menu(callback_query.message, user_id)
+        return
+
+    await callback_query.answer()
 
     if data == "pro_edit_basic":
         set_pro_temp_field(user_id, "is_first_profile_create", False)
@@ -497,6 +596,7 @@ async def handle_pro_callbacks(
     if data.startswith("pro_species:"):
         value = data.split(":", 1)[1]
         set_profile_field(user_id, "type", value)
+        set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_NAME, False)
         await callback_query.message.reply("Как зовут питомца? (можно пропустить)")
         return
@@ -504,6 +604,7 @@ async def handle_pro_callbacks(
     if data.startswith("pro_sex:"):
         value = data.split(":", 1)[1]
         set_profile_field(user_id, "sex", value)
+        set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_STERILIZED, True)
         await callback_query.message.reply(
             "Стерилизован/кастрирован?",
@@ -515,6 +616,7 @@ async def handle_pro_callbacks(
         value = data.split(":", 1)[1]
         if value != "skip":
             set_profile_field(user_id, "sterilized_status", value)
+            set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_BREED, False)
         profile = get_pro_profile(user_id)
         pet_type = (profile.get("type") if isinstance(profile, dict) else None) or profile.get("species")
@@ -546,6 +648,7 @@ async def handle_pro_callbacks(
             return
         set_profile_field(user_id, "weight_kg", None)
         set_profile_field(user_id, "bcs", None)
+        set_profile_dirty(user_id, True)
         await finalize_basic_profile(callback_query.message, user_id)
         return
 
@@ -553,9 +656,11 @@ async def handle_pro_callbacks(
         value = data.split(":", 1)[1]
         if value == "skip":
             set_profile_field(user_id, "bcs", None)
+            set_profile_dirty(user_id, True)
             await finalize_basic_profile(callback_query.message, user_id)
             return
         set_profile_field(user_id, "bcs", value)
+        set_profile_dirty(user_id, True)
         temp = get_pro_temp(user_id)
         if temp.get("weight_mode") == "bcs":
             set_pro_step(user_id, PRO_STEP_WEIGHT_AFTER_BCS_ASK_KG, True)
@@ -582,12 +687,22 @@ async def handle_pro_callbacks(
     if data.startswith("pro_post:"):
         value = data.split(":", 1)[1]
         if value == "continue":
-            set_pro_step(user_id, PRO_STEP_NONE, False)
-            pending = pop_pending_question(user_id)
-            if pending:
-                await send_backend_response_cb(client_tg, callback_query.message, user_id, pending)
+            async def execute_go_question():
+                set_pro_step(user_id, PRO_STEP_NONE, False)
+                pending = pop_pending_question(user_id)
+                if pending:
+                    await send_backend_response_cb(client_tg, callback_query.message, user_id, pending)
+                else:
+                    await callback_query.message.reply("Напишите свой вопрос.")
+            if is_profile_dirty(user_id):
+                await guard_dirty_or_execute(
+                    user_id,
+                    {"type": "go_question"},
+                    callback_query.message,
+                    execute_go_question,
+                )
             else:
-                await callback_query.message.reply("Напишите свой вопрос.")
+                await execute_go_question()
             return
         if value == "health":
             set_pro_step(user_id, PRO_STEP_HEALTH_PICK, True)
@@ -702,8 +817,9 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
     if pro_step == PRO_STEP_NAME:
         raw_name = message.text.strip()
         lowered = raw_name.lower()
-        if lowered in ("пропустить", "skip", "-", "—", "нет"):
+        if lowered in ("пропустить", "skip", "-", "-", "нет"):
             set_profile_field(user_id, "name", None)
+            set_profile_dirty(user_id, True)
             set_pro_step(user_id, PRO_STEP_AGE, False)
             await message.reply(
                 "Сколько лет питомцу? Например: 2 года / 6 месяцев"
@@ -717,6 +833,7 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
             return True
         cleaned = cleaned[:30]
         set_profile_field(user_id, "name", cleaned)
+        set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_AGE, False)
         await message.reply(
             "Сколько лет питомцу? Например: 2 года / 6 месяцев"
@@ -725,6 +842,7 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
 
     if pro_step == PRO_STEP_AGE:
         set_profile_field(user_id, "age_text", message.text.strip())
+        set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_SEX, True)
         await message.reply("Пол питомца:", reply_markup=build_sex_keyboard())
         return True
@@ -736,6 +854,7 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
             set_profile_field(user_id, "animal_kind", message.text.strip())
         else:
             set_profile_field(user_id, "breed", message.text.strip())
+        set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_WEIGHT_MODE, True)
         await message.reply(
             "Вес питомца (опционально). Что удобнее?",
@@ -758,6 +877,7 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
             )
             return True
         set_profile_field(user_id, "weight_kg", weight)
+        set_profile_dirty(user_id, True)
         temp = get_pro_temp(user_id)
         if temp.get("weight_mode") == "kg":
             set_pro_step(user_id, PRO_STEP_WEIGHT_BCS, True)

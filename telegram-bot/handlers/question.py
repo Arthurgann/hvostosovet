@@ -249,6 +249,10 @@ def setup_question_handlers(app: Client):
     async def handle_save_profile(client_tg: Client, callback_query: CallbackQuery):
         await handle_save_profile_flow(client_tg, callback_query)
 
+    @app.on_callback_query(filters.regex("^dirty_(save|discard|stay)$"))
+    async def handle_dirty_guard(client_tg: Client, callback_query: CallbackQuery):
+        await handle_pro_callbacks_flow(client_tg, callback_query, send_backend_response)
+
     @app.on_callback_query(filters.regex("^pro_(?!save_profile$)"))
     async def handle_pro_callbacks(client_tg: Client, callback_query: CallbackQuery):
         await handle_pro_callbacks_flow(client_tg, callback_query, send_backend_response)

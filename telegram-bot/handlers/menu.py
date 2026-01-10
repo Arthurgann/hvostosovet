@@ -4,7 +4,9 @@ import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from services.backend_client import get_active_pet
-from services.state import set_pet_profile, set_pet_profile_loaded
+from services.state import get_pro_step, set_pet_profile, set_pet_profile_loaded, PRO_STEP_NONE
+from flows.pro_flow import guard_dirty_or_execute
+from ui.main_menu import show_main_menu
 from ui.labels import (
     BTN_DOG,
     BTN_CAT,
@@ -21,15 +23,6 @@ from ui.labels import (
 )
 
 def setup_menu_handlers(app: Client):
-
-    def build_main_menu() -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton(BTN_DOG, callback_data="pet_dog")],
-            [InlineKeyboardButton(BTN_CAT, callback_data="pet_cat")],
-            [InlineKeyboardButton(BTN_OTHER, callback_data="pet_other")],
-            [InlineKeyboardButton(BTN_MY_PET, callback_data="my_pet")],
-            [InlineKeyboardButton(BTN_HOW_IT_WORKS, callback_data="how_it_works")]
-        ])
 
     @app.on_callback_query(filters.regex("^pet_(dog|cat|other)$"))
     async def handle_pet_selection(client: Client, callback_query: CallbackQuery):
@@ -136,9 +129,15 @@ def setup_menu_handlers(app: Client):
     @app.on_callback_query(filters.regex("^back_to_main$"))
     async def back_to_main(client: Client, callback_query: CallbackQuery):
         await callback_query.answer()
-        await callback_query.message.edit_text(
-            "Привет! 🐾 Я - ХвостоСовет, твой помощник по заботе о питомце.\n\n"
-            "Выберите, кто ваш питомец:\n\n"
-            "Или откройте «Мой питомец», чтобы управлять профилем.",
-            reply_markup=build_main_menu()
-        )
+        user_id = callback_query.from_user.id if callback_query.from_user else None
+        if user_id is not None and get_pro_step(user_id) != PRO_STEP_NONE:
+            async def execute_go_menu():
+                await show_main_menu(callback_query.message)
+            await guard_dirty_or_execute(
+                user_id,
+                {"type": "go_menu"},
+                callback_query.message,
+                execute_go_menu,
+            )
+            return
+        await show_main_menu(callback_query.message)

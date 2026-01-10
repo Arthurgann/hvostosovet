@@ -26,6 +26,8 @@ BTN_VACCINES_PREVENTION = "💉 Прививки и профилактика"
 BTN_IMPORTANT = "📌 Важное о питомце"
 BTN_SAVE_CHANGES = "💾 Сохранить изменения"
 BTN_EDIT_BASIC = "📝 Изменить базовые данные"
+BTN_DIRTY_DISCARD = "🚫 Не сохранять"
+BTN_DIRTY_STAY = "↩️ Остаться"
 
 # Дополнительные кнопки
 BTN_FILL_FORM = "✍️ Заполнить анкету"
