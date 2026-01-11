@@ -5,10 +5,14 @@ from typing import Optional
 
 from psycopg.types.json import Json
 
-from app.core.config import SESSION_MAX_TURNS, SESSION_TTL_MIN
+from app.core.config import SESSION_MAX_TURNS, SESSION_TTL_MIN, PRO_SESSION_TTL_MIN
 
 logger = logging.getLogger("hvostosovet")
 DEFAULT_MODE = "emergency"
+
+
+def get_session_ttl_min(user_plan: str | None) -> int:
+    return PRO_SESSION_TTL_MIN if user_plan == "pro" else SESSION_TTL_MIN
 
 
 def _iso_now(now: datetime) -> str:
@@ -142,11 +146,13 @@ def upsert_session_turn(
     user_id,
     question,
     answer,
+    user_plan: str | None,
     session_context: dict | None = None,
     active_session_id: uuid.UUID | None = None,
 ) -> None:
     now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(minutes=SESSION_TTL_MIN)
+    ttl_min = get_session_ttl_min(user_plan)
+    expires_at = now + timedelta(minutes=ttl_min)
     q = "" if question is None else str(question)
     a = "" if answer is None else str(answer)
     new_turn = {"t": _iso_now(now), "mode": None, "q": q, "a": a}
@@ -170,7 +176,12 @@ def upsert_session_turn(
         turns = turns[-SESSION_MAX_TURNS:]
     normalized_context["turns"] = turns
 
-    logger.info("SESSION_DEBUG session_context=%s", normalized_context)
+    logger.info(
+        "SESSION_DEBUG plan=%s ttl_min=%s turns=%s",
+        user_plan,
+        ttl_min,
+        len(normalized_context.get("turns") or []),
+    )
     if active_session_id:
         db.execute(
             "update sessions "

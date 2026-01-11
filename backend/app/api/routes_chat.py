@@ -577,6 +577,7 @@ def chat_ask(
                         user_id,
                         payload.text,
                         answer_text,
+                        user_plan=user_plan,
                         session_context=session_context,
                         active_session_id=active_session_id,
                     )
