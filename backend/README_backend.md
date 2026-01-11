@@ -157,21 +157,12 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/chat/ask" -Headers
 - LLM слой вынесен в app/services (llm.py + openai_client.py), routes_chat.py только роутер.
 - TTL-сессии: память диалога хранится в `sessions.session_context (v1)` и включает `active.mode` и `turns[{t, mode, q, a}]`; TTL и размер хвоста управляются `SESSION_TTL_MIN` и `SESSION_MAX_TURNS`.
 
-## Техническое сохранение профиля питомца
+## Сохранение профиля питомца (Pro)
 
-Telegram-бот сохраняет профиль питомца по кнопке
-через стандартный endpoint:
+- Сохранение выполняется отдельным endpoint: POST /v1/pets/active/save.
+- Endpoint не вызывает LLM и не пишет в sessions (это не чат).
+- Семантика сохранения: PATCH/merge (частичные обновления не затирают профиль целиком).
+- После сохранения профиль используется в POST /v1/chat/ask (Pro может подтягиваться из БД, если пришёл   minimal {type}).
 
-POST /v1/chat/ask
-text="save_profile"
-
-
-Особенности:
-- запрос используется **только для сохранения профиля**;
-- ответ LLM игнорируется на стороне бота;
-- профиль сохраняется в `pets.profile`;
-- при отсутствии `pet_profile.type` запись пропускается.
-
-TODO:
-- выделить отдельный endpoint (например `POST /v1/pets/active/profile`),
-  чтобы не писать технические вызовы в `sessions`.
+--Free: профиль из БД не подтягивается.
+--Pro: при minimal профиле backend может подтянуть активного питомца из БД
