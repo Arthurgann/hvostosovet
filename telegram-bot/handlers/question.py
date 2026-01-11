@@ -435,9 +435,15 @@ def setup_question_handlers(app: Client):
             await send_backend_response(client_tg, message, user_id)
 
         elif step == "question":
+            # PRO: do not block chatting if we already have a usable pet_profile (e.g., loaded from DB)
             if is_user_pro(last_limits) and not is_pro_profile_complete(get_pro_profile(user_id)):
-                set_pending_question(user_id, message.text)
-                await start_pro_flow(message, user_id)
-                return
+                pet_profile = get_pet_profile(user_id)
+                has_pet_type = isinstance(pet_profile, dict) and bool(pet_profile.get("type"))
+
+                # Only start Pro анкета if we truly have no pet profile context yet
+                if not has_pet_type:
+                    set_pending_question(user_id, message.text)
+                    await start_pro_flow(message, user_id)
+                    return
             set_question(user_id, message.text)
             await send_backend_response(client_tg, message, user_id)

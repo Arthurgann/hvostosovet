@@ -496,3 +496,50 @@ python main.py
   - `PETS_ACTIVE_SAVE ok=True …`
   - отсутствие save-логики в `/chat/ask`.
 
+## 2026-01-11  
+### Backend + Telegram-бот — minimal profile contract (Free/Pro) + очистка `pet_profile`
+
+#### Backend
+- Зафиксирован **контракт “minimal profile” (Free / Pro)** для `POST /v1/chat/ask`:
+  - **Pro + minimal `{type}`** → профиль подтягивается из **БД**;
+  - **Free + minimal `{type}`** → профиль используется **только из request** (БД не трогается);
+  - **Pro + rich payload** → профиль используется **из request**, без перезаписи данными из БД.
+- В ответ `/v1/chat/ask` добавлено явное поле:
+  - `meta.pet_profile_source: request | db | none`;
+  - (опционально) `meta.pet_profile_pet_id` — для дебага и трассировки.
+- Поведение backend закреплено как **явный контракт**, а не побочный эффект.
+
+#### Smoke / тесты
+- Добавлен smoke-скрипт:
+  - `backend/scripts/smoke_min_profile_contract.ps1`.
+- Скрипт проверяет 3 сценария:
+  1) Pro + `{type}` → `meta.pet_profile_source=db`;
+  2) Free + `{type}` → `meta.pet_profile_source=request`;
+  3) Pro + rich profile → `meta.pet_profile_source=request`.
+- Smoke задокументирован:
+  - добавлен раздел **4.3 “Minimal profile contract (Free/Pro)”** в `docs/DEV_SMOKE.md`.
+- Smoke успешно пройден локально:
+  - контракт Free/Pro подтверждён;
+  - защита от регрессий обеспечена.
+
+#### Telegram-бот
+- Реализована **локальная очистка `pet_profile` перед отправкой в `/v1/chat/ask`**:
+  - из payload удаляются служебные поля бота  
+    (`step`, `context`, `current_mode`, `question`);
+  - очистка выполняется **рекурсивно** и применяется **только к копии**;
+  - локальный state бота **не мутируется**.
+- Очистка применяется **только для `/v1/chat/ask`**:
+  - сохранение профиля через `/v1/pets/active/save` не затронуто.
+- Добавлен отладочный лог при `BOT_DEBUG=1`:
+  - `[PET_PROFILE_CLEAN] removed_keys=[...]`.
+- Бот зафиксирован как **чистый клиент**:
+  - в backend передаются только бизнес-данные профиля питомца;
+  - снижен шум в логах и риск утечки служебных полей.
+
+Проверка:
+- Запуск `smoke_min_profile_contract.ps1` → `OK: minimal profile contract`.
+- Free-сценарий: кнопки → описание питомца → вопрос → второй вопрос — работает стабильно.
+- В логах backend:
+  - `CHAT_PET_PROFILE source=db` / `source=request` в ожидаемых сценариях;
+  - отсутствие `step/context/...` в `pet_profile`.
+
