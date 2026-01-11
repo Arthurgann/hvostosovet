@@ -137,6 +137,82 @@ def normalize_pet_dict(pet_dict: dict | None) -> dict | None:
     return {k: v for k, v in pet_dict.items() if k not in _PET_SERVICE_KEYS}
 
 
+_HEALTH_ALLOWED_TAGS = {"allergy", "gi", "skin_coat", "mobility", "other"}
+
+
+def _as_clean_text(v) -> str | None:
+    if v is None:
+        return None
+    if isinstance(v, str):
+        t = v.strip()
+        return t if t else None
+    t = str(v).strip()
+    return t if t else None
+
+
+def normalize_health_block(pet_dict: dict | None) -> dict | None:
+    """
+    Канон хранения health в pets.profile:
+      health: { notes_by_tag: {allergy, gi, skin_coat, mobility, other} }
+    Правила:
+    - health.tags НЕ сохраняем (удаляем).
+    - health.notes_by_tag должен быть dict[str, str] только по разрешённым ключам.
+    - если пришли неизвестные ключи — аккуратно добавляем их в other (как "key: value"),
+      чтобы не терять информацию.
+    """
+    if not isinstance(pet_dict, dict):
+        return pet_dict
+
+    health = pet_dict.get("health")
+    if health is None:
+        return pet_dict
+
+    if isinstance(health, str):
+        t = health.strip()
+        if t:
+            pet_dict["health"] = {"notes_by_tag": {"other": t}}
+        else:
+            pet_dict.pop("health", None)
+        return pet_dict
+
+    if not isinstance(health, dict):
+        pet_dict.pop("health", None)
+        return pet_dict
+
+    notes = health.get("notes_by_tag")
+    if notes is None:
+        notes = {}
+    if not isinstance(notes, dict):
+        notes = {}
+
+    out_notes: dict[str, str] = {}
+
+    for k in _HEALTH_ALLOWED_TAGS:
+        v = _as_clean_text(notes.get(k))
+        if v:
+            out_notes[k] = v
+
+    extra_lines = []
+    for k, v in notes.items():
+        if k in _HEALTH_ALLOWED_TAGS:
+            continue
+        vv = _as_clean_text(v)
+        if vv:
+            extra_lines.append(f"{k}: {vv}")
+
+    if extra_lines:
+        prev_other = out_notes.get("other")
+        extra_text = "\n".join(extra_lines)
+        out_notes["other"] = f"{prev_other}\n{extra_text}".strip() if prev_other else extra_text
+
+    if out_notes:
+        pet_dict["health"] = {"notes_by_tag": out_notes}
+    else:
+        pet_dict.pop("health", None)
+
+    return pet_dict
+
+
 def is_minimal_pet_profile(pet_dict: dict | None) -> bool:
     if not isinstance(pet_dict, dict) or not pet_dict:
         return True
@@ -754,6 +830,7 @@ def pets_active_save(
                 )
 
             pet_to_save = normalize_pet_dict(pet_to_save)
+            pet_to_save = normalize_health_block(pet_to_save)
 
             try:
                 active_pet = get_active_pet(cur, user_id)
