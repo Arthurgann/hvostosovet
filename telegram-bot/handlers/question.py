@@ -39,6 +39,52 @@ from services.state import (
 
 VALID_MODES = {"emergency", "care", "vaccines"}
 
+# --- pet_profile sanitize before sending to backend (/v1/chat/ask) ---
+
+DROP_PET_PROFILE_KEYS_FOR_ASK = {
+    "step",
+    "context",
+    "current_mode",
+    "question",
+}
+
+
+def _sanitize_obj_drop_keys(obj, drop_keys):
+    """
+    Returns (sanitized_obj, removed_keys_set)
+    - Works recursively for dict/list
+    - Does NOT mutate input objects
+    """
+    removed = set()
+
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if k in drop_keys:
+                removed.add(k)
+                continue
+            v2, rem2 = _sanitize_obj_drop_keys(v, drop_keys)
+            removed |= rem2
+            out[k] = v2
+        return out, removed
+
+    if isinstance(obj, list):
+        out_list = []
+        for item in obj:
+            item2, rem2 = _sanitize_obj_drop_keys(item, drop_keys)
+            removed |= rem2
+            out_list.append(item2)
+        return out_list, removed
+
+    return obj, removed
+
+
+def sanitize_pet_profile_for_ask(pet_profile: dict):
+    """Sanitize a copy of pet_profile for /v1/chat/ask payload."""
+    if not isinstance(pet_profile, dict):
+        return pet_profile, set()
+    return _sanitize_obj_drop_keys(pet_profile, DROP_PET_PROFILE_KEYS_FOR_ASK)
+
 
 
 def normalize_mode(value: str | None) -> str:
@@ -152,6 +198,11 @@ async def send_backend_response(
             f"has_profile={bool(profile)} has_pro_profile={bool(pro_profile)} "
             f"has_pet_profile={bool(pet_profile_to_send)} text_len={len(summary)}"
         )
+        # Sanitize pet_profile for /v1/chat/ask (do not mutate local state)
+        if isinstance(pet_profile_to_send, dict):
+            pet_profile_to_send, removed_keys = sanitize_pet_profile_for_ask(pet_profile_to_send)
+            if config.BOT_DEBUG and removed_keys:
+                print(f"[PET_PROFILE_CLEAN] removed_keys={sorted(list(removed_keys))}")
         result = await asyncio.to_thread(
             ask_backend,
             base_url,
