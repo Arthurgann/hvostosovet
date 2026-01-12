@@ -91,7 +91,7 @@ def format_type_line(profile: dict) -> str:
         label = "Кот/кошка"
     elif pet_type == "other":
         kind = clip(profile.get("animal_kind") or "", 40)
-        label = f"Другое: {kind}" if kind else "Другое"
+        label = kind if kind else "Другое"
     else:
         label = "Питомец"
     line = f"🐾 {label}"
