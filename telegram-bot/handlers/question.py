@@ -15,7 +15,8 @@ from flows.pro_flow import (
     handle_pro_text_step,
 )
 from services.backend_client import ask_backend
-from ui.labels import BTN_DOG, BTN_CAT, BTN_OTHER, BTN_SKIP
+from ui.labels import BTN_SKIP
+from ui.keyboards import kb_pet_selection
 from services.state import (
     get_profile,
     get_pro_profile,
@@ -96,16 +97,6 @@ def normalize_mode(value: str | None) -> str:
     if normalized not in VALID_MODES:
         return "emergency"
     return normalized
-
-
-def build_pet_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(BTN_DOG, callback_data="pet_dog")],
-            [InlineKeyboardButton(BTN_CAT, callback_data="pet_cat")],
-            [InlineKeyboardButton(BTN_OTHER, callback_data="pet_other")],
-        ]
-    )
 
 
 def build_basic_info_keyboard() -> InlineKeyboardMarkup:
@@ -388,7 +379,7 @@ def setup_question_handlers(app: Client):
                 "📝 Напишите ниже любые важные детали, которые вы не указали ранее, "
                 "одним сообщением — я добавлю их к вашему вопросу.\n\n"
                 "Или воспользуйтесь кнопками, чтобы заполнить данные по шагам:",
-                reply_markup=build_pet_keyboard(),
+                reply_markup=kb_pet_selection(),
             )
             return
 

@@ -28,10 +28,6 @@ from ui.labels import (
     BTN_HEALTH_FEATURES,
     BTN_VACCINES_PREVENTION,
     BTN_IMPORTANT,
-    BTN_EMERGENCY,
-    BTN_CARE,
-    BTN_VACCINES,
-    BTN_HOME,
     BTN_HEALTH_SKIN,
     BTN_HEALTH_GI,
     BTN_HEALTH_ALLERGY,
@@ -44,6 +40,8 @@ from ui.labels import (
     BTN_PARASITES_IRREGULAR,
     BTN_MY_PET,
 )
+from ui.keyboards import kb_mode_selection
+from ui.texts import TEXT_WHAT_INTERESTS_YOU
 from ui.main_menu import show_main_menu
 from services.state import (
     get_pro_profile,
@@ -227,17 +225,6 @@ async def guard_dirty_or_execute(
         return
     set_pending_action(user_id, action)
     await show_dirty_guard(message)
-
-
-def build_mode_keyboard(pet_type: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(BTN_EMERGENCY, callback_data=f"{pet_type}_emergency")],
-            [InlineKeyboardButton(BTN_CARE, callback_data=f"{pet_type}_care")],
-            [InlineKeyboardButton(BTN_VACCINES, callback_data=f"{pet_type}_vaccines")],
-            [InlineKeyboardButton(BTN_HOME, callback_data="back_to_main")],
-        ]
-    )
 
 
 def build_health_keyboard() -> InlineKeyboardMarkup:
@@ -517,8 +504,8 @@ async def handle_pet_profile_actions(
         profile = get_pet_profile(user_id) or get_pro_profile(user_id)
         pet_type = (profile.get("type") if isinstance(profile, dict) else None) or "other"
         await callback_query.message.edit_text(
-            "Что вас интересует?",
-            reply_markup=build_mode_keyboard(pet_type),
+            TEXT_WHAT_INTERESTS_YOU,
+            reply_markup=kb_mode_selection(pet_type),
         )
         return
     if action == "update":
