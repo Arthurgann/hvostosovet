@@ -128,6 +128,14 @@ def build_species_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def build_name_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(BTN_SKIP, callback_data="pro_name:skip")],
+        ]
+    )
+
+
 def build_sex_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -626,7 +634,19 @@ async def handle_pro_callbacks(
         set_profile_field(user_id, "type", value)
         set_profile_dirty(user_id, True)
         set_pro_step(user_id, PRO_STEP_NAME, False)
-        await callback_query.message.reply("Как зовут питомца? (можно пропустить)")
+        await callback_query.message.reply(
+            "Как зовут питомца? (можно пропустить)",
+            reply_markup=build_name_keyboard(),
+        )
+        return
+
+    if data == "pro_name:skip":
+        set_profile_field(user_id, "name", None)
+        set_profile_dirty(user_id, True)
+        set_pro_step(user_id, PRO_STEP_AGE, False)
+        await callback_query.message.reply(
+            "Сколько лет питомцу? Например: 2 года / 6 месяцев"
+        )
         return
 
     if data.startswith("pro_sex:"):
