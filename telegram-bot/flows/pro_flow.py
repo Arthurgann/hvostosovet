@@ -40,7 +40,7 @@ from ui.labels import (
     BTN_PARASITES_IRREGULAR,
     BTN_MY_PET,
 )
-from ui.keyboards import kb_mode_selection
+from ui.keyboards import kb_mode_selection, kb_my_pet_short
 from ui.texts import TEXT_WHAT_INTERESTS_YOU
 from ui.main_menu import show_main_menu
 from services.state import (
@@ -67,7 +67,6 @@ from services.state import (
     set_pro_step,
     set_pro_temp_field,
     add_health_tag,
-    pop_pending_question,
     set_pending_action,
     pop_pending_action,
     PRO_STEP_NONE,
@@ -379,6 +378,63 @@ async def show_post_menu(message: Message, user_id: int) -> None:
         set_profile_created_shown(user_id, True)
 
 
+def _format_my_pet_short(profile: dict) -> str:
+    lines = ["⭐ Мой питомец"]
+    pet_type = (profile.get("type") or profile.get("species") or "").strip()
+    name = (profile.get("name") or "").strip()
+    if pet_type == "dog":
+        label = "Собака"
+    elif pet_type == "cat":
+        label = "Кот/кошка"
+    elif pet_type == "other":
+        kind = (profile.get("animal_kind") or "").strip()
+        label = kind.capitalize() if kind else "Другое"
+    else:
+        label = "Питомец"
+    type_line = f"🐾 {label}"
+    if name:
+        type_line = f"{type_line} · {name}"
+    lines.append(type_line)
+    age_text = (profile.get("age_text") or "").strip()
+    if age_text:
+        lines.append(f"🎂 {age_text}")
+    return "\n".join(lines)
+
+
+async def show_my_pet_short(message: Message, user_id: int) -> None:
+    profile = get_pet_profile(user_id)
+    if not isinstance(profile, dict):
+        active = await asyncio.to_thread(get_active_pet, user_id)
+        if isinstance(active, dict):
+            normalized = {}
+            base = active.get("profile")
+            if isinstance(base, dict):
+                normalized = dict(base)
+            for key in [
+                "type",
+                "species",
+                "name",
+                "age_text",
+                "animal_kind",
+            ]:
+                if active.get(key) is not None:
+                    normalized[key] = active.get(key)
+            normalized.pop("id", None)
+            normalized.pop("profile", None)
+            profile = normalized
+            set_pet_profile(user_id, profile)
+            set_pet_profile_loaded(user_id, True)
+    if isinstance(profile, dict):
+        text = _format_my_pet_short(profile)
+        try:
+            await message.edit_text(text, reply_markup=kb_my_pet_short())
+        except Exception:
+            # если нельзя отредактировать (например, не то сообщение) — просто отправим новое
+            await message.reply(text, reply_markup=kb_my_pet_short())
+    else:
+        await show_post_menu(message, user_id)
+
+
 async def execute_pending_action(
     client_tg: Client,
     message: Message,
@@ -390,13 +446,8 @@ async def execute_pending_action(
         await show_post_menu(message, user_id)
         return
     action_type = action.get("type")
-    if action_type == "go_question":
-        set_pro_step(user_id, PRO_STEP_NONE, False)
-        pending = pop_pending_question(user_id)
-        if pending:
-            await send_backend_response_cb(client_tg, message, user_id, pending)
-        else:
-            await message.reply("Напишите свой вопрос.")
+    if action_type == "go_my_pet":
+        await show_my_pet_short(message, user_id)
         return
     if action_type == "go_menu":
         await show_main_menu(message)
@@ -664,22 +715,17 @@ async def handle_pro_callbacks(
     if data.startswith("pro_post:"):
         value = data.split(":", 1)[1]
         if value == "continue":
-            async def execute_go_question():
-                set_pro_step(user_id, PRO_STEP_NONE, False)
-                pending = pop_pending_question(user_id)
-                if pending:
-                    await send_backend_response_cb(client_tg, callback_query.message, user_id, pending)
-                else:
-                    await callback_query.message.reply("Напишите свой вопрос.")
+            async def execute_go_my_pet():
+                await show_my_pet_short(callback_query.message, user_id)
             if is_profile_dirty(user_id):
                 await guard_dirty_or_execute(
                     user_id,
-                    {"type": "go_question"},
+                    {"type": "go_my_pet"},
                     callback_query.message,
-                    execute_go_question,
+                    execute_go_my_pet,
                 )
             else:
-                await execute_go_question()
+                await execute_go_my_pet()
             return
         if value == "health":
             set_pro_step(user_id, PRO_STEP_HEALTH_PICK, True)
