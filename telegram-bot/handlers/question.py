@@ -266,6 +266,10 @@ async def send_backend_response(
                     limits_line = "💎 План: Pro"
             if limits_line:
                 answer = f"{answer}\n\n{limits_line}"
+            if isinstance(attachments, list) and len(attachments) > 0:
+                answer = (
+                    f"{answer}\n\nℹ️ Для лучшего анализа: фото крупно и в фокусе, при хорошем освещении."
+                )
             await message.reply(f"🧠 Ответ:\n\n{answer}")
         elif status == 0 or body == "backend_unreachable":
             await message.reply("⚠️ Сервер сейчас недоступен. Попробуйте через пару минут.")
@@ -562,3 +566,4 @@ def setup_question_handlers(app: Client):
                     return
             set_question(user_id, message.text)
             await send_backend_response(client_tg, message, user_id)
+
