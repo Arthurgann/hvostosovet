@@ -56,6 +56,7 @@ def ask_backend(
             "status": 0,
             "error": "backend_unreachable",
             "limits": None,
+            "body": None,
         }
 
     body = {}
@@ -63,7 +64,7 @@ def ask_backend(
         try:
             body = json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError:
-            body = {}
+            body = raw.decode("utf-8", errors="replace")
 
     if status_code == 200:
         return {"ok": True, "data": body}
@@ -72,15 +73,16 @@ def ask_backend(
     limits = None
     if isinstance(body, dict):
         limits = body.get("limits")
-        error = body.get("error") or body or "unknown_error"
+        error = body.get("error") or "unknown_error"
     elif body:
-        error = body
+        error = str(body)
 
     return {
         "ok": False,
         "status": status_code,
         "error": error,
         "limits": limits,
+        "body": body,
     }
 
 

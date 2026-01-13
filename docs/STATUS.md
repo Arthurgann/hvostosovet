@@ -45,6 +45,39 @@
 - Контракт источника профиля:
   `request > db (Pro only) > none`.
 
+ ### Pro Vision (загрузка и анализ фото)
+
+- Реализована загрузка **фото питомца для Pro-пользователей** (Telegram):
+  - изображение скачивается из Telegram;
+  - сжимается (Pillow);
+  - кодируется в base64 и отправляется в backend (Variant A).
+- Free / Pro поведение:
+  - **Free** → backend возвращает `402 pro_required`, бот показывает upsell;
+  - **Pro** → фото + текст обрабатываются vision-моделью.
+- Backend:
+  - при наличии изображения (`attachments`) принудительно выбирается `policy=pro_vision`;
+  - provider = `openrouter`;
+  - модель берётся из `OPENROUTER_VISION_MODEL`;
+  - добавлен guard `503 openrouter_not_configured`, если ключ не задан.
+- LLM:
+  - используется multimodal формат сообщений:
+    `[{type: "text"}, {type: "image_url"}]`;
+  - формат изображения: `data:image/jpeg;base64,...`.
+- Prompts:
+  - добавлен `VISION_PREFIX`;
+  - явно разрешает анализ изображений;
+  - запрещает ответы вида «я не вижу изображение»;
+  - применён ко всем режимам (`care`, `vaccines`, `emergency`).
+- Диагностика:
+  - backend логи `LLM_MESSAGES_IMAGE`, `LLM_HTTP`;
+  - в ответ `/v1/chat/ask` добавлены `meta.llm_provider`, `meta.llm_model`, `meta.policy_name`.
+
+Примечания:
+- `qwen/qwen-vl-plus` не работает с Variant A (data URL) через OpenRouter;
+- рабочая модель по умолчанию: `openai/gpt-4o-mini` (через OpenRouter);
+- архитектура подготовлена для Variant B (`/media/init`, https URL).
+ 
+
 ### Архитектура
 - Telegram‑бот = **тонкий клиент** (UX + state).
 - Backend = **единый мозг** (логика, лимиты, LLM, память).
@@ -60,6 +93,14 @@
 - Историю изменений профиля питомца.
 - Web / PWA UI (подготовка есть, реализация позже).
 - Платёжную систему и подписки.
+
+
+## Последние изменения
+
+- Pro Vision: добавлена защита от списания квоты при отказе vision-модели;
+  ошибки `vision_not_processed` обрабатываются отдельно с понятным UX в боте.
+
+
 
 ---
 

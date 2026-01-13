@@ -243,7 +243,10 @@ async def send_backend_response(
         print(f"[BACKEND] status={result.get('status')} ok={result.get('ok')}")
         ok = result.get("ok")
         status = result.get("status")
-        body = result.get("data") if ok else result.get("error")
+        error = result.get("error")
+        body = result.get("data") if ok else result.get("body")
+        if body is None:
+            body = error
         body_keys = ",".join(sorted(body.keys())) if isinstance(body, dict) else ""
         if config.BOT_DEBUG:
             print(f"[HTTP] status={status} user_id={user_id} ok={ok} body_keys={body_keys}")
@@ -286,6 +289,21 @@ async def send_backend_response(
                 )
             await message.reply(message_text, reply_markup=reply_markup)
         elif status == 402 and (
+            body == "vision_limit_exceeded"
+            or (isinstance(body, dict) and body.get("error") == "vision_limit_exceeded")
+            or (error == "vision_limit_exceeded")
+        ):
+            limits = result.get("limits")
+            if isinstance(body, dict):
+                limits = body.get("limits") or limits
+            reset_at = None
+            if isinstance(limits, dict):
+                reset_at = limits.get("vision_images_reset_at")
+            message_text = "📷 Лимит фото на месяц исчерпан."
+            if reset_at:
+                message_text = f"{message_text}\nСброс: {reset_at}"
+            await message.reply(message_text)
+        elif status == 402 and (
             body == "pro_required"
             or (isinstance(body, dict) and body.get("error") == "pro_required")
         ):
@@ -295,6 +313,15 @@ async def send_backend_response(
             )
         elif status in (401, 403):
             await message.reply("Ошибка авторизации между ботом и сервером (BOT_BACKEND_TOKEN).")
+        elif status == 502 and (
+            error == "vision_not_processed"
+            or (isinstance(body, dict) and body.get("error") == "vision_not_processed")
+            or (result.get("error") == "vision_not_processed")
+        ):
+            await message.reply(
+                "🖼️ Не удалось распознать фото.\n"
+                "Попробуйте отправить другое фото (крупнее, без размытия) или повторите запрос."
+            )
         elif isinstance(status, int) and status >= 500:
             await message.reply("Сервис временно недоступен. Попробуйте позже.")
         else:

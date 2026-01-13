@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from psycopg.types.json import Json
 
+from app.core import config as cfg
 from app.core.auth import require_bot_token
 from app.core.db import get_connection
 from app.services import LlmTimeoutError, ask_llm
@@ -24,6 +25,20 @@ from app.services.prompts import PROMPTS_BY_MODE
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
+
+VISION_REFUSAL_MARKERS = [
+    "не могу видеть изображ",
+    "не вижу изображ",
+    "не могу просматривать изображ",
+    "я не вижу изображение",
+    "i can't see the image",
+    "i cannot see the image",
+    "cannot view images",
+    "can't view images",
+    "i can't access images",
+    "as a text-based model",
+    "i'm unable to view images",
+]
 
 
 class ChatAskUser(BaseModel):
@@ -404,6 +419,9 @@ def chat_ask(
             cooldown_sec_default = int(os.getenv("COOLDOWN_SEC", "25"))
             window_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
             window_end = window_start + timedelta(days=1)
+            vision_limit_month = cfg.PRO_VISION_IMAGE_LIMIT_MONTH
+            vision_remaining = None
+            vision_reset_at_out = None
 
             telegram_user_id = payload.user.telegram_user_id
             pet_dict = normalize_pet_dict(payload.pet_profile or payload.pet)
@@ -413,9 +431,12 @@ def chat_ask(
             limits_reset_at = None
             window_end_at = None
             count = None
+            vision_images_used = 0
+            vision_images_reset_at = None
             if telegram_user_id is not None:
                 cur.execute(
-                    "select id, plan from users where telegram_user_id = %s",
+                    "select id, plan, vision_images_used, vision_images_reset_at "
+                    "from users where telegram_user_id = %s",
                     (telegram_user_id,),
                 )
                 user_row = cur.fetchone()
@@ -429,13 +450,16 @@ def chat_ask(
                         (telegram_user_id,),
                     )
                     cur.execute(
-                        "select id, plan from users where telegram_user_id = %s",
+                        "select id, plan, vision_images_used, vision_images_reset_at "
+                        "from users where telegram_user_id = %s",
                         (telegram_user_id,),
                     )
                     user_row = cur.fetchone()
                 if user_row:
                     user_id = user_row[0]
                     user_plan = user_row[1]
+                    vision_images_used = int(user_row[2] or 0)
+                    vision_images_reset_at = user_row[3]
                     cur.execute(
                         "update request_dedup set user_id = %s where request_id = %s and user_id is null",
                         (user_id, x_request_id),
@@ -450,6 +474,62 @@ def chat_ask(
                         return JSONResponse(
                             status_code=status.HTTP_402_PAYMENT_REQUIRED,
                             content={"ok": False, "error": "pro_required"},
+                        )
+                    # Pro vision quota (monthly) — only for image requests
+                    if has_image and user_plan == "pro":
+                        # 1) reset if needed (DB time)
+                        cur.execute(
+                            "update users "
+                            "set vision_images_used = 0, "
+                            "    vision_images_reset_at = date_trunc('month', now()) + interval '1 month' "
+                            "where id = %s and vision_images_reset_at <= now() "
+                            "returning vision_images_used, vision_images_reset_at",
+                            (user_id,),
+                        )
+                        row_reset = cur.fetchone()
+                        if row_reset:
+                            vision_images_used = int(row_reset[0] or 0)
+                            vision_images_reset_at = row_reset[1]
+
+                        # 2) check limit
+                        if int(vision_images_used or 0) >= int(vision_limit_month):
+                            cur.execute(
+                                "update request_dedup "
+                                "set status = 'failed', error_text = 'vision_limit_exceeded', finished_at = now() "
+                                "where request_id = %s",
+                                (x_request_id,),
+                            )
+                            vision_remaining = 0
+                            vision_reset_at_out = (
+                                vision_images_reset_at.isoformat().replace("+00:00", "Z")
+                                if vision_images_reset_at
+                                else None
+                            )
+
+                            return JSONResponse(
+                                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                                content={
+                                    "ok": False,
+                                    "error": "vision_limit_exceeded",
+                                    "limits": {
+                                        "plan": user_plan or "free",
+                                        "remaining_today": limits_remaining_today,
+                                        "reset_at": limits_reset_at,
+                                        "vision_images_limit_month": int(vision_limit_month),
+                                        "vision_images_used": int(vision_images_used or 0),
+                                        "vision_images_remaining": 0,
+                                        "vision_images_reset_at": vision_reset_at_out,
+                                    },
+                                },
+                            )
+
+                        vision_remaining = int(vision_limit_month) - int(
+                            vision_images_used or 0
+                        )
+                        vision_reset_at_out = (
+                            vision_images_reset_at.isoformat().replace("+00:00", "Z")
+                            if vision_images_reset_at
+                            else None
                         )
                     cur.execute(
                         "select window_start_at, window_end_at, count, cooldown_until "
@@ -765,6 +845,71 @@ def chat_ask(
                     content={"error": "llm_failed"},
                 )
 
+            if has_image and answer_text:
+                answer_lower = answer_text.lower()
+                refused = any(marker in answer_lower for marker in VISION_REFUSAL_MARKERS)
+                if refused:
+                    logger.info(
+                        "VISION_GUARD refused=True rid=%s excerpt=%s",
+                        x_request_id,
+                        (answer_text or "")[:250],
+                    )
+                    cur.execute(
+                        "update request_dedup "
+                        "set status = 'failed', error_text = 'vision_not_processed', finished_at = now() "
+                        "where request_id = %s",
+                        (x_request_id,),
+                    )
+                    limits_payload = {
+                        "plan": user_plan or "free",
+                        "remaining_today": limits_remaining_today,
+                        "reset_at": limits_reset_at,
+                        "vision_images_limit_month": int(vision_limit_month)
+                        if (has_image and user_plan == "pro")
+                        else None,
+                        "vision_images_used": int(vision_images_used or 0)
+                        if (has_image and user_plan == "pro")
+                        else None,
+                        "vision_images_remaining": int(vision_remaining)
+                        if (has_image and user_plan == "pro" and vision_remaining is not None)
+                        else None,
+                        "vision_images_reset_at": vision_reset_at_out
+                        if (has_image and user_plan == "pro")
+                        else None,
+                    }
+                    return JSONResponse(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        content={
+                            "ok": False,
+                            "error": "vision_not_processed",
+                            "message": "Не удалось проанализировать фото. "
+                            "Попробуйте отправить другое фото или повторить запрос.",
+                            "limits": limits_payload,
+                        },
+                    )
+
+            # increment monthly vision usage only after successful LLM response
+            if has_image and user_plan == "pro":
+                cur.execute(
+                    "update users "
+                    "set vision_images_used = vision_images_used + 1 "
+                    "where id = %s "
+                    "returning vision_images_used, vision_images_reset_at",
+                    (user_id,),
+                )
+                row_inc = cur.fetchone()
+                if row_inc:
+                    vision_images_used = int(row_inc[0] or 0)
+                    vision_images_reset_at = row_inc[1]
+                    vision_remaining = max(
+                        0, int(vision_limit_month) - int(vision_images_used or 0)
+                    )
+                    vision_reset_at_out = (
+                        vision_images_reset_at.isoformat().replace("+00:00", "Z")
+                        if vision_images_reset_at
+                        else None
+                    )
+
             if user_id:
                 try:
                     upsert_session_turn(
@@ -794,6 +939,18 @@ def chat_ask(
                     "plan": user_plan or "free",
                     "remaining_today": limits_remaining_today,
                     "reset_at": limits_reset_at,
+                    "vision_images_limit_month": int(vision_limit_month)
+                    if (has_image and user_plan == "pro")
+                    else None,
+                    "vision_images_used": int(vision_images_used or 0)
+                    if (has_image and user_plan == "pro")
+                    else None,
+                    "vision_images_remaining": int(vision_remaining)
+                    if (has_image and user_plan == "pro")
+                    else None,
+                    "vision_images_reset_at": vision_reset_at_out
+                    if (has_image and user_plan == "pro")
+                    else None,
                 },
                 "upsell": {"show": False, "reason": None, "cta": None},
                 "research": {"used_this_period": 0, "limit": 0, "reset_at": None},
