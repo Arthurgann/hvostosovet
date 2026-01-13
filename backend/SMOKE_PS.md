@@ -1,6 +1,6 @@
 # Smoke tests (PowerShell)
 
-$env:BOT_BACKEND_TOKEN="devtoken123"
+$env:BOT_BACKEND_TOKEN="YOUR_DEV_TOKEN"
 
 # GET /v1/health
 curl http://127.0.0.1:8000/v1/health

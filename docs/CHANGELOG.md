@@ -787,3 +787,15 @@ python main.py
   - `/pets/active/save` Free / Pro.
 - Регрессий не выявлено.
 
+## 2026-01-13
+### Backend — dev-only dotenv и защита от больших payload
+
+- `.env` загружается только в dev (`ENV=dev`), `override=False` — прод окружение не перетирается значениями из файла.
+- Для `/v1/chat/ask` добавлены ограничения входных данных:
+  - `text` ограничен до 8000 символов;
+  - `attachments` валидируются (raw base64 или `data:*;base64,`), декодируются и режутся по лимиту 3 MB (decoded bytes).
+- Добавлены понятные ошибки валидации:
+  - `invalid_attachment_base64`
+  - `attachment_too_large`
+- В документации dev-токен заменён на плейсхолдер `YOUR_DEV_TOKEN`.
+

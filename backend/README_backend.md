@@ -79,7 +79,7 @@ curl http://127.0.0.1:8000/v1/health
 
 PowerShell пример с токеном:
 ```powershell
-$env:BOT_BACKEND_TOKEN="devtoken123"
+$env:BOT_BACKEND_TOKEN="YOUR_DEV_TOKEN"
 curl -H "Authorization: Bearer $env:BOT_BACKEND_TOKEN" http://127.0.0.1:8000/v1/me
 ```
 

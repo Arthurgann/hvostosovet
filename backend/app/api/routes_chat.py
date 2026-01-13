@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import logging
 import os
@@ -6,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends, Header, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core import config as cfg
 from app.core.auth import require_bot_token
@@ -55,6 +57,8 @@ VISION_REFUSAL_MARKERS = [
     "i'm unable to view images",
 ]
 
+MAX_ATTACHMENT_BYTES = 3_000_000
+
 
 class ChatAskUser(BaseModel):
     telegram_user_id: int
@@ -62,7 +66,7 @@ class ChatAskUser(BaseModel):
 
 class ChatAskPayload(BaseModel):
     user: ChatAskUser
-    text: str | None = None
+    text: str | None = Field(default=None, max_length=8000)
     mode: str | None = None
     pet: dict | None = None
     pet_profile: dict | None = None
@@ -94,13 +98,23 @@ def normalize_attachments(attachments: list[dict] | None) -> list[dict]:
         data = item.get("data")
         if not isinstance(data, str) or not data.strip():
             raise ValueError("invalid_attachment_data")
+        data = data.strip()
+        payload = data
+        if payload.startswith("data:") and "," in payload:
+            payload = payload.split(",", 1)[1]
+        try:
+            decoded = base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("invalid_attachment_base64")
+        if len(decoded) > MAX_ATTACHMENT_BYTES:
+            raise ValueError("attachment_too_large")
         mime = item.get("mime") or "image/jpeg"
         normalized.append(
             {
                 "type": "image",
                 "source": "inline",
                 "mime": mime,
-                "data": data.strip(),
+                "data": payload,
             }
         )
     return normalized
