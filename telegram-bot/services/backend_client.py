@@ -14,6 +14,7 @@ def ask_backend(
     request_id: str,
     profile: dict | None = None,
     pet_profile: dict | None = None,
+    attachments: list[dict] | None = None,
 ) -> dict:
     if not base_url or not token:
         raise RuntimeError("missing_backend_config")
@@ -28,6 +29,8 @@ def ask_backend(
         payload["profile"] = profile
     if pet_profile is not None:
         payload["pet_profile"] = pet_profile
+    if attachments:
+        payload["attachments"] = attachments
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(
         f"{base_url}/v1/chat/ask",

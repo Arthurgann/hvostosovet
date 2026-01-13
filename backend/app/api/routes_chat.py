@@ -36,6 +36,7 @@ class ChatAskPayload(BaseModel):
     mode: str | None = None
     pet: dict | None = None
     pet_profile: dict | None = None
+    attachments: list[dict] | None = None
 
 
 class SaveActivePetPayload(BaseModel):
@@ -135,6 +136,38 @@ def normalize_pet_dict(pet_dict: dict | None) -> dict | None:
     if not isinstance(pet_dict, dict):
         return None
     return {k: v for k, v in pet_dict.items() if k not in _PET_SERVICE_KEYS}
+
+
+def normalize_attachments(attachments: list[dict] | None) -> list[dict]:
+    if attachments is None:
+        return []
+    if not isinstance(attachments, list):
+        raise ValueError("invalid_attachments")
+    if len(attachments) > 1:
+        raise ValueError("too_many_attachments")
+    normalized = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            raise ValueError("invalid_attachment")
+        att_type = item.get("type")
+        if att_type != "image":
+            raise ValueError("unsupported_attachment_type")
+        source = item.get("source")
+        if source != "inline":
+            raise ValueError("unsupported_attachment_source")
+        data = item.get("data")
+        if not isinstance(data, str) or not data.strip():
+            raise ValueError("invalid_attachment_data")
+        mime = item.get("mime") or "image/jpeg"
+        normalized.append(
+            {
+                "type": "image",
+                "source": "inline",
+                "mime": mime,
+                "data": data.strip(),
+            }
+        )
+    return normalized
 
 
 _HEALTH_ALLOWED_TAGS = {"allergy", "gi", "skin_coat", "mobility", "other"}
@@ -350,6 +383,22 @@ def chat_ask(
                     content={"error": "missing_text"},
                 )
 
+            try:
+                attachments = normalize_attachments(payload.attachments)
+            except ValueError as exc:
+                error_text = str(exc) or "invalid_attachments"
+                cur.execute(
+                    "update request_dedup "
+                    "set status = 'failed', error_text = %s, finished_at = now() "
+                    "where request_id = %s",
+                    (error_text, x_request_id),
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={"error": error_text},
+                )
+            has_image = bool(attachments)
+
             now = datetime.now(timezone.utc)
             daily_limit = int(os.getenv("FREE_DAILY_LIMIT", "3"))
             cooldown_sec_default = int(os.getenv("COOLDOWN_SEC", "25"))
@@ -391,6 +440,17 @@ def chat_ask(
                         "update request_dedup set user_id = %s where request_id = %s and user_id is null",
                         (user_id, x_request_id),
                     )
+                    if has_image and user_plan != "pro":
+                        cur.execute(
+                            "update request_dedup "
+                            "set status = 'failed', error_text = 'pro_required', finished_at = now() "
+                            "where request_id = %s",
+                            (x_request_id,),
+                        )
+                        return JSONResponse(
+                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                            content={"ok": False, "error": "pro_required"},
+                        )
                     cur.execute(
                         "select window_start_at, window_end_at, count, cooldown_until "
                         "from rate_limits where user_id = %s",
@@ -590,31 +650,90 @@ def chat_ask(
                 selected_mode,
             )
 
-            policy = "free_default"
+            policy_name = "free_default"
             policies = {
                 "free_default": {
-                    "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                    "provider": "openai",
+                    "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
                     "temperature": 0.2,
                     "max_tokens": 400,
                     "timeout_sec": 60,
                 },
                 "pro_default": {
-                    "model": os.getenv("OPENAI_MODEL_PRO", "gpt-4o-mini"),
+                    "provider": "openai",
+                    "model": os.getenv("OPENAI_MODEL_PRO")
+                    or os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
                     "temperature": 0.2,
                     "max_tokens": 600,
                     "timeout_sec": 60,
                 },
+                "pro_vision": {
+                    "provider": "openrouter",
+                    "model": os.getenv("OPENROUTER_VISION_MODEL", "openai/gpt-4o-mini"),
+                    "temperature": 0.2,
+                    "max_tokens": 600,
+                    "timeout_sec": 90,
+                },
                 "pro_research": {
+                    "provider": "openai",
                     "model": os.getenv("OPENAI_MODEL_RESEARCH", "gpt-4o-mini"),
                     "temperature": 0.1,
                     "max_tokens": 800,
                     "timeout_sec": 90,
                 },
             }
-            llm_params = policies[policy]
+            if has_image:
+                policy_name = "pro_vision"
+            elif user_plan == "pro":
+                policy_name = "pro_default"
+            llm_params = policies.get(policy_name, {}).copy()
+            if has_image:
+                llm_params["provider"] = "openrouter"
+                llm_params["model"] = os.getenv(
+                    "OPENROUTER_VISION_MODEL", "openai/gpt-4o-mini"
+                )
+            logger.info(
+                "CHAT_HAS_IMAGE=%s policy=%s provider=%s",
+                "true" if has_image else "false",
+                policy_name,
+                llm_params.get("provider"),
+            )
+
+            provider = llm_params.get("provider")
+            model = llm_params.get("model")
+            if has_image and provider == "openrouter":
+                if not (os.getenv("OPENROUTER_API_KEY") or "").strip():
+                    cur.execute(
+                        "update request_dedup "
+                        "set status = 'failed', error_text = 'openrouter_not_configured', "
+                        "finished_at = now() "
+                        "where request_id = %s",
+                        (x_request_id,),
+                    )
+                    return JSONResponse(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        content={"error": "openrouter_not_configured"},
+                    )
+
+            logger.info(
+                "CHAT_POLICY policy=%s provider=%s model=%s has_image=%s",
+                policy_name,
+                provider,
+                model,
+                has_image,
+            )
 
             try:
-                answer_text = ask_llm(final_user_text, system_prompt)
+                answer_text = ask_llm(
+                    final_user_text,
+                    system_prompt,
+                    attachments=attachments if has_image else None,
+                    provider=provider,
+                    model=model,
+                    temperature=llm_params.get("temperature"),
+                    max_tokens=llm_params.get("max_tokens"),
+                    timeout_sec=llm_params.get("timeout_sec"),
+                )
             except LlmTimeoutError:
                 cur.execute(
                     "update request_dedup "
@@ -681,6 +800,9 @@ def chat_ask(
                 "meta": {
                     "pet_profile_source": pet_profile_source,
                     "pet_profile_pet_id": pet_profile_pet_id,
+                    "llm_provider": provider,
+                    "llm_model": model,
+                    "policy_name": policy_name,
                 },
             }
 

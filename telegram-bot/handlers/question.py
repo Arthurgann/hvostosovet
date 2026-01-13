@@ -2,8 +2,11 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ChatAction
 import asyncio
+import base64
+import io
 import os
 import uuid
+from PIL import Image
 import config
 from flows.pro_flow import (
     is_user_pro,
@@ -39,6 +42,9 @@ from services.state import (
 
 
 VALID_MODES = {"emergency", "care", "vaccines"}
+MAX_PHOTO_BYTES = 8 * 1024 * 1024
+MAX_PHOTO_SIDE = 1280
+JPEG_QUALITY = 70
 
 # --- pet_profile sanitize before sending to backend (/v1/chat/ask) ---
 
@@ -107,6 +113,33 @@ def build_basic_info_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def build_upsell_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Оформить Pro", callback_data="upsell_pro")],
+        ]
+    )
+
+
+def compress_photo_bytes(raw_bytes: bytes) -> bytes:
+    with Image.open(io.BytesIO(raw_bytes)) as image:
+        image = image.convert("RGB")
+        image.thumbnail((MAX_PHOTO_SIDE, MAX_PHOTO_SIDE))
+        out = io.BytesIO()
+        image.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+        return out.getvalue()
+
+
+def build_image_attachment(image_bytes: bytes) -> dict:
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return {
+        "type": "image",
+        "source": "inline",
+        "mime": "image/jpeg",
+        "data": encoded,
+    }
+
+
 
 
 def get_question_prompt_text(context: str | None) -> str:
@@ -139,6 +172,7 @@ async def send_backend_response(
     message: Message,
     user_id: int,
     question_text: str | None = None,
+    attachments: list[dict] | None = None,
 ) -> None:
     profile = get_profile(user_id)
     pro_profile = get_pro_profile(user_id)
@@ -204,6 +238,7 @@ async def send_backend_response(
             request_id,
             pro_profile,
             pet_profile_to_send,
+            attachments,
         )
         print(f"[BACKEND] status={result.get('status')} ok={result.get('ok')}")
         ok = result.get("ok")
@@ -250,6 +285,14 @@ async def send_backend_response(
                     [[InlineKeyboardButton(cta, callback_data="upsell_pro")]]
                 )
             await message.reply(message_text, reply_markup=reply_markup)
+        elif status == 402 and (
+            body == "pro_required"
+            or (isinstance(body, dict) and body.get("error") == "pro_required")
+        ):
+            await message.reply(
+                "📷 Анализ фото доступен в Pro",
+                reply_markup=build_upsell_keyboard(),
+            )
         elif status in (401, 403):
             await message.reply("Ошибка авторизации между ботом и сервером (BOT_BACKEND_TOKEN).")
         elif isinstance(status, int) and status >= 500:
@@ -345,6 +388,60 @@ def setup_question_handlers(app: Client):
             f"Пример: {example}",
             reply_markup=build_basic_info_keyboard(),
             disable_web_page_preview=True
+        )
+
+    @app.on_message(filters.private & filters.photo)
+    async def handle_photo_question(client_tg: Client, message: Message):
+        user_id = message.from_user.id
+        if not message.photo:
+            await message.reply("Не удалось получить фото. Попробуйте ещё раз.")
+            return
+
+        photo = message.photo
+        # В разных версиях Pyrogram это может быть:
+        # - один объект Photo
+        # - список Photo (sizes)
+        if isinstance(photo, list):
+            largest = max(photo, key=lambda item: item.file_size or 0)
+        else:
+            largest = photo
+
+        if not largest or not getattr(largest, "file_id", None):
+            await message.reply("Не смог прочитать фото. Попробуйте отправить другое изображение.")
+            return
+        if largest.file_size and largest.file_size > MAX_PHOTO_BYTES:
+            await message.reply("Слишком большое фото. Максимум 8 МБ.")
+            return
+
+        try:
+            raw_file = await client_tg.download_media(largest, in_memory=True)
+        except Exception:
+            await message.reply("Не удалось скачать фото. Попробуйте ещё раз.")
+            return
+
+        raw_bytes = raw_file.getvalue() if hasattr(raw_file, "getvalue") else raw_file
+        if not isinstance(raw_bytes, (bytes, bytearray)):
+            await message.reply("Не удалось обработать фото. Попробуйте ещё раз.")
+            return
+
+        try:
+            compressed = compress_photo_bytes(bytes(raw_bytes))
+        except Exception:
+            await message.reply("Не удалось обработать фото. Попробуйте другое изображение.")
+            return
+
+        if len(compressed) > MAX_PHOTO_BYTES:
+            await message.reply("Фото слишком большое даже после сжатия. Попробуйте другое.")
+            return
+
+        caption = (message.caption or "").strip() or "Что на фото?"
+        attachments = [build_image_attachment(compressed)]
+        await send_backend_response(
+            client_tg,
+            message,
+            user_id,
+            question_text=caption,
+            attachments=attachments,
         )
 
     @app.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
