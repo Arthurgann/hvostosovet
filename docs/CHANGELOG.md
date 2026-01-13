@@ -762,3 +762,28 @@ python main.py
 - Отправить фото → ответ + подсказка по качеству.
 - Отправить текст без фото → подсказки нет.
 
+## 2026-01-13
+### Backend — декомпозиция routes_chat.py (без изменения поведения)
+
+#### Backend
+- Выполнен безопасный рефактор `routes_chat.py`:
+  - файл разделён на сервисы без изменения API, JSON-ответов и статус-кодов;
+  - логика роутов сохранена, файл стал тонким orchestrator’ом.
+- Вынесены и переиспользуются сервисы:
+  - `request_dedup.py` — idempotency (`X-Request-Id`) и dedup-логика;
+  - `pet_profile_service.py` — нормализация и определение effective pet profile;
+  - `limits_service.py` — daily limit + cooldown (Free/Pro).
+- Поведение полностью сохранено:
+  - контракты `/v1/chat/ask` и `/v1/pets/active/save` **не изменены**;
+  - тексты ошибок, upsell, лимиты и поля ответа — без изменений;
+  - ключи логов (`CHAT_*`, `VISION_*`, `PETS_ACTIVE_SAVE`) сохранены.
+
+#### Smoke
+- Проверены сценарии:
+  - missing / invalid `X-Request-Id`;
+  - dedup (`X-Dedup-Hit=1`);
+  - Free + image → `402 pro_required`;
+  - daily limit + cooldown → `429`;
+  - `/pets/active/save` Free / Pro.
+- Регрессий не выявлено.
+

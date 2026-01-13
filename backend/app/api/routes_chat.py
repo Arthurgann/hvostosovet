@@ -2,18 +2,33 @@ import json
 import logging
 import os
 import traceback
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends, Header, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from psycopg.types.json import Json
 
 from app.core import config as cfg
 from app.core.auth import require_bot_token
 from app.core.db import get_connection
 from app.services import LlmTimeoutError, ask_llm
+from app.services.limits_service import apply_rate_limits_or_return
+from app.services.pet_profile_service import (
+    build_pet_dict_from_row,
+    deep_merge_dict,
+    get_active_pet,
+    normalize_health_block,
+    normalize_pet_dict,
+    resolve_effective_pet_profile,
+    upsert_active_pet,
+)
+from app.services.request_dedup import (
+    dedup_attach_user,
+    dedup_begin_or_return,
+    dedup_mark_done,
+    dedup_mark_failed,
+    validate_x_request_id,
+)
 from app.services.sessions import (
     DEFAULT_MODE,
     build_context_prefix,
@@ -59,100 +74,6 @@ class SaveActivePetPayload(BaseModel):
     pet_profile: dict | None = None
 
 
-def deep_merge_dict(base: dict | None, patch: dict | None) -> dict:
-    """
-    Deep-merge словарей: patch имеет приоритет, base сохраняется.
-    Для dict -> рекурсивно.
-    Для list/str/int/etc -> patch полностью заменяет значение.
-    """
-    base = base or {}
-    patch = patch or {}
-    out = dict(base)
-    for k, v in patch.items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = deep_merge_dict(out[k], v)
-        else:
-            out[k] = v
-    return out
-
-
-def _parse_birth_date(value):
-    if not value or not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value).date()
-    except ValueError:
-        return None
-
-
-def get_active_pet(cur, user_id):
-    cur.execute(
-        "select id, user_id, type, name, sex, birth_date, age_text, breed, profile, "
-        "created_at, archived_at, updated_at "
-        "from pets "
-        "where user_id = %s and archived_at is null "
-        "order by created_at desc "
-        "limit 1",
-        (user_id,),
-    )
-    return cur.fetchone()
-
-
-def build_pet_dict_from_row(active_pet_row) -> dict:
-    """
-    Собирает полный pet_dict из колонок pets + jsonb profile.
-    Колонки считаем источником правды для базовых полей.
-    """
-    if not active_pet_row:
-        return {}
-
-    # active_pet_row:
-    # 0 id, 1 user_id, 2 type, 3 name, 4 sex, 5 birth_date, 6 age_text, 7 breed, 8 profile, ...
-    pet_type = active_pet_row[2]
-    name = active_pet_row[3]
-    sex = active_pet_row[4]
-    birth_date = active_pet_row[5]
-    age_text = active_pet_row[6]
-    breed = active_pet_row[7]
-    profile = active_pet_row[8] or {}
-
-    if isinstance(profile, str):
-        try:
-            profile = json.loads(profile)
-        except json.JSONDecodeError:
-            profile = {}
-    if not isinstance(profile, dict):
-        profile = {}
-
-    base = {
-        "type": pet_type,
-        "name": name,
-        "sex": sex,
-        "birth_date": birth_date.isoformat() if birth_date else None,
-        "age_text": age_text,
-        "breed": breed,
-    }
-
-    # profile может содержать те же ключи — но базовые поля из колонок важнее
-    merged = dict(profile)
-    merged.update({k: v for k, v in base.items() if v is not None})
-
-    # sex может быть "unknown" — это тоже валидно
-    if "sex" not in merged and sex:
-        merged["sex"] = sex
-
-    return merged
-
-
-_PET_SERVICE_KEYS = {"step", "context", "current_mode", "question"}
-
-
-def normalize_pet_dict(pet_dict: dict | None) -> dict | None:
-    if not isinstance(pet_dict, dict):
-        return None
-    return {k: v for k, v in pet_dict.items() if k not in _PET_SERVICE_KEYS}
-
-
 def normalize_attachments(attachments: list[dict] | None) -> list[dict]:
     if attachments is None:
         return []
@@ -185,144 +106,6 @@ def normalize_attachments(attachments: list[dict] | None) -> list[dict]:
     return normalized
 
 
-_HEALTH_ALLOWED_TAGS = {"allergy", "gi", "skin_coat", "mobility", "other"}
-
-
-def _as_clean_text(v) -> str | None:
-    if v is None:
-        return None
-    if isinstance(v, str):
-        t = v.strip()
-        return t if t else None
-    t = str(v).strip()
-    return t if t else None
-
-
-def normalize_health_block(pet_dict: dict | None) -> dict | None:
-    """
-    Канон хранения health в pets.profile:
-      health: { notes_by_tag: {allergy, gi, skin_coat, mobility, other} }
-    Правила:
-    - health.tags НЕ сохраняем (удаляем).
-    - health.notes_by_tag должен быть dict[str, str] только по разрешённым ключам.
-    - если пришли неизвестные ключи — аккуратно добавляем их в other (как "key: value"),
-      чтобы не терять информацию.
-    """
-    if not isinstance(pet_dict, dict):
-        return pet_dict
-
-    health = pet_dict.get("health")
-    if health is None:
-        return pet_dict
-
-    if isinstance(health, str):
-        t = health.strip()
-        if t:
-            pet_dict["health"] = {"notes_by_tag": {"other": t}}
-        else:
-            pet_dict.pop("health", None)
-        return pet_dict
-
-    if not isinstance(health, dict):
-        pet_dict.pop("health", None)
-        return pet_dict
-
-    notes = health.get("notes_by_tag")
-    if notes is None:
-        notes = {}
-    if not isinstance(notes, dict):
-        notes = {}
-
-    out_notes: dict[str, str] = {}
-
-    for k in _HEALTH_ALLOWED_TAGS:
-        v = _as_clean_text(notes.get(k))
-        if v:
-            out_notes[k] = v
-
-    extra_lines = []
-    for k, v in notes.items():
-        if k in _HEALTH_ALLOWED_TAGS:
-            continue
-        vv = _as_clean_text(v)
-        if vv:
-            extra_lines.append(f"{k}: {vv}")
-
-    if extra_lines:
-        prev_other = out_notes.get("other")
-        extra_text = "\n".join(extra_lines)
-        out_notes["other"] = f"{prev_other}\n{extra_text}".strip() if prev_other else extra_text
-
-    if out_notes:
-        pet_dict["health"] = {"notes_by_tag": out_notes}
-    else:
-        pet_dict.pop("health", None)
-
-    return pet_dict
-
-
-def is_minimal_pet_profile(pet_dict: dict | None) -> bool:
-    if not isinstance(pet_dict, dict) or not pet_dict:
-        return True
-    keys_without_type = [k for k in pet_dict.keys() if k != "type"]
-    return not keys_without_type
-
-
-def upsert_active_pet(cur, user_id, pet_dict):
-    pet_dict = pet_dict or {}
-    active_pet = get_active_pet(cur, user_id)
-    if active_pet:
-        existing_full = build_pet_dict_from_row(active_pet)
-        pet_dict = deep_merge_dict(existing_full, pet_dict)
-
-    pet_type = pet_dict.get("type")
-    if not pet_type:
-        raise ValueError("missing pet.type")
-    name = pet_dict.get("name")
-    sex = pet_dict.get("sex") or "unknown"
-    birth_date = _parse_birth_date(pet_dict.get("birth_date"))
-    age_text = pet_dict.get("age_text")
-    breed = pet_dict.get("breed")
-    profile = Json(pet_dict)
-
-    if active_pet:
-        pet_id = active_pet[0]
-        cur.execute(
-            "update pets "
-            "set type = %s, name = %s, sex = %s, birth_date = %s, age_text = %s, "
-            "breed = %s, profile = %s, updated_at = now() "
-            "where id = %s",
-            (
-                pet_type,
-                name,
-                sex,
-                birth_date,
-                age_text,
-                breed,
-                profile,
-                pet_id,
-            ),
-        )
-        return pet_id
-
-    cur.execute(
-        "insert into pets "
-        "(user_id, type, name, sex, birth_date, age_text, breed, profile, created_at, updated_at) "
-        "values (%s, %s, %s, %s, %s, %s, %s, %s, now(), now()) "
-        "returning id",
-        (
-            user_id,
-            pet_type,
-            name,
-            sex,
-            birth_date,
-            age_text,
-            breed,
-            profile,
-        ),
-    )
-    row = cur.fetchone()
-    return row[0] if row else None
 
 
 @router.post("/chat/ask", dependencies=[Depends(require_bot_token)])
@@ -331,68 +114,18 @@ def chat_ask(
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     payload: ChatAskPayload = Body(...),
 ):
-    if not x_request_id:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "missing_x_request_id"},
-        )
-    try:
-        uuid.UUID(x_request_id)
-    except ValueError:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "invalid_x_request_id"},
-        )
+    validation_response = validate_x_request_id(x_request_id)
+    if validation_response:
+        return validation_response
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "select status, response_json from request_dedup where request_id = %s",
-                (x_request_id,),
-            )
-            row = cur.fetchone()
-            if row:
-                status_value, response_json = row
-                if status_value == "done":
-                    response.headers["X-Dedup-Hit"] = "1"
-                    if isinstance(response_json, str):
-                        return json.loads(response_json)
-                    return response_json or {}
-                return JSONResponse(
-                    status_code=status.HTTP_409_CONFLICT,
-                    content={"error": "request_in_progress"},
-                )
-
-            cur.execute(
-                "insert into request_dedup (request_id, user_id, status, created_at, response_json) "
-                "values (%s, null, 'started', now(), null) on conflict do nothing",
-                (x_request_id,),
-            )
-            cur.execute(
-                "select status, response_json from request_dedup where request_id = %s",
-                (x_request_id,),
-            )
-            row = cur.fetchone()
-            if row:
-                status_value, response_json = row
-                if status_value == "done":
-                    response.headers["X-Dedup-Hit"] = "1"
-                    if isinstance(response_json, str):
-                        return json.loads(response_json)
-                    return response_json or {}
-                if status_value != "started":
-                    return JSONResponse(
-                        status_code=status.HTTP_409_CONFLICT,
-                        content={"error": "request_in_progress"},
-                    )
+            dedup_response = dedup_begin_or_return(cur, response, x_request_id)
+            if dedup_response is not None:
+                return dedup_response
 
             if not payload.text or not payload.text.strip():
-                cur.execute(
-                    "update request_dedup "
-                    "set status = 'failed', error_text = 'missing_text', finished_at = now() "
-                    "where request_id = %s",
-                    (x_request_id,),
-                )
+                dedup_mark_failed(cur, x_request_id, "missing_text")
                 return JSONResponse(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     content={"error": "missing_text"},
@@ -402,12 +135,7 @@ def chat_ask(
                 attachments = normalize_attachments(payload.attachments)
             except ValueError as exc:
                 error_text = str(exc) or "invalid_attachments"
-                cur.execute(
-                    "update request_dedup "
-                    "set status = 'failed', error_text = %s, finished_at = now() "
-                    "where request_id = %s",
-                    (error_text, x_request_id),
-                )
+                dedup_mark_failed(cur, x_request_id, error_text)
                 return JSONResponse(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     content={"error": error_text},
@@ -460,17 +188,9 @@ def chat_ask(
                     user_plan = user_row[1]
                     vision_images_used = int(user_row[2] or 0)
                     vision_images_reset_at = user_row[3]
-                    cur.execute(
-                        "update request_dedup set user_id = %s where request_id = %s and user_id is null",
-                        (user_id, x_request_id),
-                    )
+                    dedup_attach_user(cur, x_request_id, user_id)
                     if has_image and user_plan != "pro":
-                        cur.execute(
-                            "update request_dedup "
-                            "set status = 'failed', error_text = 'pro_required', finished_at = now() "
-                            "where request_id = %s",
-                            (x_request_id,),
-                        )
+                        dedup_mark_failed(cur, x_request_id, "pro_required")
                         return JSONResponse(
                             status_code=status.HTTP_402_PAYMENT_REQUIRED,
                             content={"ok": False, "error": "pro_required"},
@@ -493,11 +213,8 @@ def chat_ask(
 
                         # 2) check limit
                         if int(vision_images_used or 0) >= int(vision_limit_month):
-                            cur.execute(
-                                "update request_dedup "
-                                "set status = 'failed', error_text = 'vision_limit_exceeded', finished_at = now() "
-                                "where request_id = %s",
-                                (x_request_id,),
+                            dedup_mark_failed(
+                                cur, x_request_id, "vision_limit_exceeded"
                             )
                             vision_remaining = 0
                             vision_reset_at_out = (
@@ -531,140 +248,31 @@ def chat_ask(
                             if vision_images_reset_at
                             else None
                         )
-                    cur.execute(
-                        "select window_start_at, window_end_at, count, cooldown_until "
-                        "from rate_limits where user_id = %s",
-                        (user_id,),
+                    limits_result = apply_rate_limits_or_return(
+                        cur,
+                        user_id,
+                        user_plan,
+                        now,
+                        daily_limit,
+                        cooldown_sec_default,
+                        window_start,
+                        window_end,
                     )
-                    rl_row = cur.fetchone()
-                    if not rl_row:
-                        cur.execute(
-                            "insert into rate_limits "
-                            "(user_id, window_type, window_start_at, window_end_at, count, last_request_at, cooldown_until) "
-                            "values (%s, 'daily_utc', %s, %s, 0, %s, null)",
-                            (user_id, window_start, window_end, now),
-                        )
-                        window_start_at = window_start
-                        window_end_at = window_end
-                        count = 0
-                        cooldown_until = None
-                    else:
-                        window_start_at, window_end_at, count, cooldown_until = rl_row
-                        if window_end_at <= now:
-                            window_start_at = window_start
-                            window_end_at = window_end
-                            count = 0
-                            cooldown_until = None
+                    if isinstance(limits_result, JSONResponse):
+                        try:
+                            error_payload = json.loads(limits_result.body.decode("utf-8"))
+                            error_text = error_payload.get("error") or "rate_limited"
+                        except Exception:
+                            error_text = "rate_limited"
+                        dedup_mark_failed(cur, x_request_id, error_text)
+                        return limits_result
+                    limits_remaining_today, limits_reset_at = limits_result
 
-                    if cooldown_until and cooldown_until > now:
-                        cooldown_left = int((cooldown_until - now).total_seconds())
-                        plan_value = user_plan or "free"
-                        reset_at_out = (window_end_at or now).isoformat()
-                        limits_payload = {
-                            "plan": plan_value,
-                            "remaining_today": 0,
-                            "reset_at": reset_at_out,
-                        }
-                        if plan_value == "free":
-                            limits_payload["upsell"] = {
-                                "type": "pro",
-                                "title": "💎 Pro-доступ",
-                                "text": "С Pro вы можете задавать вопросы без дневных лимитов",
-                                "cta": "Оформить Pro",
-                            }
-                        cur.execute(
-                            "update request_dedup "
-                            "set status = 'failed', error_text = 'rate_limited', finished_at = now() "
-                            "where request_id = %s",
-                            (x_request_id,),
-                        )
-                        return JSONResponse(
-                            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                            content={
-                                "ok": False,
-                                "status": status.HTTP_429_TOO_MANY_REQUESTS,
-                                "error": "rate_limited",
-                                "cooldown_sec": max(cooldown_left, 0),
-                                "limits": limits_payload,
-                            },
-                        )
-
-                    if count >= daily_limit:
-                        cooldown_until = now + timedelta(seconds=cooldown_sec_default)
-                        plan_value = user_plan or "free"
-                        reset_at_out = (window_end_at or now).isoformat()
-                        limits_payload = {
-                            "plan": plan_value,
-                            "remaining_today": 0,
-                            "reset_at": reset_at_out,
-                        }
-                        if plan_value == "free":
-                            limits_payload["upsell"] = {
-                                "type": "pro",
-                                "title": "💎 Pro-доступ",
-                                "text": "С Pro вы можете задавать вопросы без дневных лимитов",
-                                "cta": "Оформить Pro",
-                            }
-                        cur.execute(
-                            "update rate_limits "
-                            "set cooldown_until = %s, last_request_at = %s "
-                            "where user_id = %s",
-                            (cooldown_until, now, user_id),
-                        )
-                        cur.execute(
-                            "update request_dedup "
-                            "set status = 'failed', error_text = 'daily_limit_exceeded', finished_at = now() "
-                            "where request_id = %s",
-                            (x_request_id,),
-                        )
-                        return JSONResponse(
-                            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                            content={
-                                "ok": False,
-                                "status": status.HTTP_429_TOO_MANY_REQUESTS,
-                                "error": "daily_limit_exceeded",
-                                "cooldown_sec": cooldown_sec_default,
-                                "limits": limits_payload,
-                            },
-                        )
-
-                    cur.execute(
-                        "update rate_limits "
-                        "set window_start_at = %s, window_end_at = %s, "
-                        "count = %s, last_request_at = %s, cooldown_until = null "
-                        "where user_id = %s",
-                        (window_start_at, window_end_at, count + 1, now, user_id),
-                    )
-                    limits_reset_at = window_end_at.isoformat() if window_end_at else None
-                    if daily_limit is not None and count is not None:
-                        limits_remaining_today = max(daily_limit - (count + 1), 0)
-
-            effective_pet_profile = None
-            pet_profile_source = "none"
-            pet_profile_pet_id = None
-            if not is_minimal_pet_profile(pet_dict):
-                effective_pet_profile = pet_dict
-                pet_profile_source = "request"
-            else:
-                if user_plan == "pro" and user_id:
-                    active_pet = get_active_pet(cur, user_id)
-                    if active_pet:
-                        effective_pet_profile = build_pet_dict_from_row(active_pet)
-                        pet_profile_source = "db"
-                        pet_profile_pet_id = (
-                            str(active_pet[0]) if active_pet[0] is not None else None
-                        )
-                elif effective_pet_profile is None and user_plan == "pro":
-                    pet_profile_source = "none"
-                if effective_pet_profile is None and user_plan != "pro":
-                    effective_pet_profile = pet_dict or None
-                    pet_profile_source = "request" if pet_dict else "none"
-            if isinstance(effective_pet_profile, str):
-                try:
-                    effective_pet_profile = json.loads(effective_pet_profile)
-                except json.JSONDecodeError:
-                    effective_pet_profile = None
-                    pet_profile_source = "none"
+            (
+                effective_pet_profile,
+                pet_profile_source,
+                pet_profile_pet_id,
+            ) = resolve_effective_pet_profile(cur, user_plan, user_id, pet_dict)
             has_effective_pet_profile = bool(effective_pet_profile)
             pet_profile_keys = (
                 list(effective_pet_profile.keys())
@@ -783,13 +391,7 @@ def chat_ask(
             model = llm_params.get("model")
             if has_image and provider == "openrouter":
                 if not (os.getenv("OPENROUTER_API_KEY") or "").strip():
-                    cur.execute(
-                        "update request_dedup "
-                        "set status = 'failed', error_text = 'openrouter_not_configured', "
-                        "finished_at = now() "
-                        "where request_id = %s",
-                        (x_request_id,),
-                    )
+                    dedup_mark_failed(cur, x_request_id, "openrouter_not_configured")
                     return JSONResponse(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         content={"error": "openrouter_not_configured"},
@@ -815,12 +417,7 @@ def chat_ask(
                     timeout_sec=llm_params.get("timeout_sec"),
                 )
             except LlmTimeoutError:
-                cur.execute(
-                    "update request_dedup "
-                    "set status = 'failed', error_text = 'llm_timeout', finished_at = now() "
-                    "where request_id = %s",
-                    (x_request_id,),
-                )
+                dedup_mark_failed(cur, x_request_id, "llm_timeout")
                 return JSONResponse(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                     content={"error": "llm_timeout"},
@@ -834,12 +431,7 @@ def chat_ask(
                 )
                 traceback.print_exc()
                 error_text = str(e)[:200]
-                cur.execute(
-                    "update request_dedup "
-                    "set status = 'failed', error_text = %s, finished_at = now() "
-                    "where request_id = %s",
-                    (error_text, x_request_id),
-                )
+                dedup_mark_failed(cur, x_request_id, error_text)
                 return JSONResponse(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     content={"error": "llm_failed"},
@@ -854,12 +446,7 @@ def chat_ask(
                         x_request_id,
                         (answer_text or "")[:250],
                     )
-                    cur.execute(
-                        "update request_dedup "
-                        "set status = 'failed', error_text = 'vision_not_processed', finished_at = now() "
-                        "where request_id = %s",
-                        (x_request_id,),
-                    )
+                    dedup_mark_failed(cur, x_request_id, "vision_not_processed")
                     limits_payload = {
                         "plan": user_plan or "free",
                         "remaining_today": limits_remaining_today,
@@ -964,20 +551,10 @@ def chat_ask(
             }
 
             try:
-                cur.execute(
-                    "update request_dedup "
-                    "set status = 'done', response_json = %s, finished_at = now() "
-                    "where request_id = %s",
-                    (Json(result), x_request_id),
-                )
+                dedup_mark_done(cur, x_request_id, result)
             except Exception as exc:
                 error_text = str(exc).splitlines()[0][:200]
-                cur.execute(
-                    "update request_dedup "
-                    "set status = 'failed', error_text = %s, finished_at = now() "
-                    "where request_id = %s",
-                    (error_text, x_request_id),
-                )
+                dedup_mark_failed(cur, x_request_id, error_text)
                 raise
 
     return result
@@ -997,60 +574,15 @@ def pets_active_save(
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     payload: SaveActivePetPayload = Body(...),
 ):
-    if not x_request_id:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "missing_x_request_id"},
-        )
-    try:
-        uuid.UUID(x_request_id)
-    except ValueError:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "invalid_x_request_id"},
-        )
+    validation_response = validate_x_request_id(x_request_id)
+    if validation_response:
+        return validation_response
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "select status, response_json from request_dedup where request_id = %s",
-                (x_request_id,),
-            )
-            row = cur.fetchone()
-            if row:
-                status_value, response_json = row
-                if status_value == "done":
-                    response.headers["X-Dedup-Hit"] = "1"
-                    if isinstance(response_json, str):
-                        return json.loads(response_json)
-                    return response_json or {}
-                return JSONResponse(
-                    status_code=status.HTTP_409_CONFLICT,
-                    content={"error": "request_in_progress"},
-                )
-
-            cur.execute(
-                "insert into request_dedup (request_id, user_id, status, created_at, response_json) "
-                "values (%s, null, 'started', now(), null) on conflict do nothing",
-                (x_request_id,),
-            )
-            cur.execute(
-                "select status, response_json from request_dedup where request_id = %s",
-                (x_request_id,),
-            )
-            row = cur.fetchone()
-            if row:
-                status_value, response_json = row
-                if status_value == "done":
-                    response.headers["X-Dedup-Hit"] = "1"
-                    if isinstance(response_json, str):
-                        return json.loads(response_json)
-                    return response_json or {}
-                if status_value != "started":
-                    return JSONResponse(
-                        status_code=status.HTTP_409_CONFLICT,
-                        content={"error": "request_in_progress"},
-                    )
+            dedup_response = dedup_begin_or_return(cur, response, x_request_id)
+            if dedup_response is not None:
+                return dedup_response
 
             telegram_user_id = payload.user.telegram_user_id
             user_id = None
@@ -1078,18 +610,10 @@ def pets_active_save(
                 if user_row:
                     user_id = user_row[0]
                     user_plan = user_row[1]
-                    cur.execute(
-                        "update request_dedup set user_id = %s where request_id = %s and user_id is null",
-                        (user_id, x_request_id),
-                    )
+                    dedup_attach_user(cur, x_request_id, user_id)
 
             if user_plan != "pro":
-                cur.execute(
-                    "update request_dedup "
-                    "set status = 'failed', error_text = 'pro_required', finished_at = now() "
-                    "where request_id = %s",
-                    (x_request_id,),
-                )
+                dedup_mark_failed(cur, x_request_id, "pro_required")
                 return JSONResponse(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     content={"ok": False, "error": "pro_required"},
@@ -1097,12 +621,7 @@ def pets_active_save(
 
             pet_to_save = payload.pet_profile
             if not isinstance(pet_to_save, dict):
-                cur.execute(
-                    "update request_dedup "
-                    "set status = 'failed', error_text = 'invalid_pet_profile', finished_at = now() "
-                    "where request_id = %s",
-                    (x_request_id,),
-                )
+                dedup_mark_failed(cur, x_request_id, "invalid_pet_profile")
                 return JSONResponse(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     content={"ok": False, "error": "invalid_pet_profile"},
@@ -1117,12 +636,7 @@ def pets_active_save(
                 pet_to_save = deep_merge_dict(existing_full, pet_to_save or {})
 
                 if not pet_to_save.get("type"):
-                    cur.execute(
-                        "update request_dedup "
-                        "set status = 'failed', error_text = 'missing_pet_type', finished_at = now() "
-                        "where request_id = %s",
-                        (x_request_id,),
-                    )
+                    dedup_mark_failed(cur, x_request_id, "missing_pet_type")
                     return JSONResponse(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         content={"ok": False, "error": "missing_pet_type"},
@@ -1142,12 +656,7 @@ def pets_active_save(
                     cur.execute("release savepoint pet_upsert")
                 except Exception:
                     pass
-                cur.execute(
-                    "update request_dedup "
-                    "set status = 'failed', error_text = 'pet_upsert_failed', finished_at = now() "
-                    "where request_id = %s",
-                    (x_request_id,),
-                )
+                dedup_mark_failed(cur, x_request_id, "pet_upsert_failed")
                 return JSONResponse(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     content={"ok": False, "error": "pet_upsert_failed"},
@@ -1159,12 +668,7 @@ def pets_active_save(
                 telegram_user_id,
                 result.get("pet_id"),
             )
-            cur.execute(
-                "update request_dedup "
-                "set status = 'done', response_json = %s, finished_at = now() "
-                "where request_id = %s",
-                (Json(result), x_request_id),
-            )
+            dedup_mark_done(cur, x_request_id, result)
             return result
 
 
