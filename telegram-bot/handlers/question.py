@@ -6,7 +6,7 @@ import base64
 import io
 import os
 import uuid
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import config
 from flows.pro_flow import (
     is_user_pro,
@@ -17,7 +17,7 @@ from flows.pro_flow import (
     handle_save_profile as handle_save_profile_flow,
     handle_pro_text_step,
 )
-from services.backend_client import ask_backend
+from services.backend_client import ask_backend, get_active_pet
 from ui.labels import BTN_SKIP
 from ui.keyboards import kb_pet_selection
 from services.state import (
@@ -45,6 +45,7 @@ VALID_MODES = {"emergency", "care", "vaccines"}
 MAX_PHOTO_BYTES = 8 * 1024 * 1024
 MAX_PHOTO_SIDE = 1280
 JPEG_QUALITY = 70
+Image.MAX_IMAGE_PIXELS = 20_000_000
 
 # --- pet_profile sanitize before sending to backend (/v1/chat/ask) ---
 
@@ -122,12 +123,15 @@ def build_upsell_keyboard() -> InlineKeyboardMarkup:
 
 
 def compress_photo_bytes(raw_bytes: bytes) -> bytes:
-    with Image.open(io.BytesIO(raw_bytes)) as image:
-        image = image.convert("RGB")
-        image.thumbnail((MAX_PHOTO_SIDE, MAX_PHOTO_SIDE))
-        out = io.BytesIO()
-        image.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-        return out.getvalue()
+    try:
+        with Image.open(io.BytesIO(raw_bytes)) as image:
+            image = image.convert("RGB")
+            image.thumbnail((MAX_PHOTO_SIDE, MAX_PHOTO_SIDE))
+            out = io.BytesIO()
+            image.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+            return out.getvalue()
+    except (Image.DecompressionBombError, UnidentifiedImageError, OSError):
+        raise
 
 
 def build_image_attachment(image_bytes: bytes) -> dict:
@@ -138,6 +142,19 @@ def build_image_attachment(image_bytes: bytes) -> dict:
         "mime": "image/jpeg",
         "data": encoded,
     }
+
+
+async def is_pro_user(user_id: int, last_limits: dict | None) -> bool | None:
+    if is_user_pro(last_limits):
+        return True
+    result = await asyncio.to_thread(get_active_pet, user_id)
+    if result == "pro_required":
+        return False
+    if result is None:
+        return None
+    if isinstance(result, dict):
+        return True
+    return None
 
 
 
@@ -342,6 +359,15 @@ async def send_backend_response(
 
 
 def setup_question_handlers(app: Client):
+    @app.on_message(
+        filters.private
+        & (filters.voice | filters.audio | filters.document | filters.video | filters.sticker)
+    )
+    async def handle_unsupported_media(client_tg: Client, message: Message):
+        await message.reply(
+            "Пока я поддерживаю только текст и фото. Пришлите вопрос текстом или отправьте фото с подписью."
+        )
+
     @app.on_callback_query(filters.regex("^upsell_pro$"))
     async def handle_upsell_pro(client_tg: Client, callback_query: CallbackQuery):
         await callback_query.answer()
@@ -440,7 +466,12 @@ def setup_question_handlers(app: Client):
         if not largest or not getattr(largest, "file_id", None):
             await message.reply("Не смог прочитать фото. Попробуйте отправить другое изображение.")
             return
-        if largest.file_size and largest.file_size > MAX_PHOTO_BYTES:
+        if largest.file_size is None:
+            await message.reply(
+                "Не удалось определить размер фото. Пожалуйста, отправьте другое изображение."
+            )
+            return
+        if largest.file_size > MAX_PHOTO_BYTES:
             await message.reply("Слишком большое фото. Максимум 8 МБ.")
             return
 
@@ -457,6 +488,11 @@ def setup_question_handlers(app: Client):
 
         try:
             compressed = compress_photo_bytes(bytes(raw_bytes))
+        except (Image.DecompressionBombError, UnidentifiedImageError, OSError):
+            await message.reply(
+                "Фото слишком большое или повреждено. Попробуйте другое (крупнее, без размытия)."
+            )
+            return
         except Exception:
             await message.reply("Не удалось обработать фото. Попробуйте другое изображение.")
             return
@@ -477,6 +513,18 @@ def setup_question_handlers(app: Client):
 
     @app.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
     async def collect_unified_info(client_tg: Client, message: Message):
+        if config.BOT_DEBUG:
+            user_id = message.from_user.id if message.from_user else None
+            text = message.text or ""
+            preview = text.replace("\n", " ").replace("\r", " ")[:80]
+            has_photo = bool(getattr(message, "photo", None))
+            has_voice = bool(getattr(message, "voice", None))
+            has_document = bool(getattr(message, "document", None))
+            print(
+                f"[IN] user_id={user_id} text_len={len(text)} "
+                f"preview=\"{preview}\" has_photo={has_photo} "
+                f"has_voice={has_voice} has_document={has_document}"
+            )
         user_id = message.from_user.id
         profile = get_profile(user_id)
         pro_step = get_pro_step(user_id)
@@ -487,10 +535,16 @@ def setup_question_handlers(app: Client):
         if handled:
             return
 
-        if is_user_pro(last_limits) and not is_pro_profile_complete(pro_profile) and not profile:
+        pro_flag = await is_pro_user(user_id, last_limits)
+        if not profile and pro_flag is True and not is_pro_profile_complete(pro_profile):
             if not get_pending_question(user_id):
                 set_pending_question(user_id, message.text)
             await start_pro_flow(message, user_id)
+            return
+        if not profile and pro_flag is None:
+            await message.reply(
+                "⚠️ Не удалось определить тариф. Нажмите /start или попробуйте ещё раз."
+            )
             return
 
         if not profile:
