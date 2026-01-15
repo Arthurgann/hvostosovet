@@ -30,6 +30,7 @@
 - backend/app/services/request_dedup.py — idempotency.
 - backend/app/sql/*.sql — миграции (users.plan, pets.profile, vision limits).
 - backend/scripts/smoke_min_profile_contract.ps1 — smoke контракта minimal profile.
+- backend/scripts/prompt_eval_run.py — dev-стенд оценки качества ответов LLM (prompt-eval).
 
 ## Главные потоки
 - chat_ask: telegram-bot/handlers/question.py → telegram-bot/services/backend_client.py → backend/app/api/routes_chat.py (/v1/chat/ask) → backend/app/services/pet_profile_service.py → backend/app/services/prompts.py + llm.py + openai_client.py → ответ в бот.
