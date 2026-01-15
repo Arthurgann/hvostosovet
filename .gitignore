@@ -26,3 +26,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# prompt eval runs
+backend/scripts/_eval_runs/

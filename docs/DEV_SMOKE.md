@@ -178,6 +178,24 @@ powershell -ExecutionPolicy Bypass -File .\scripts\smoke_min_profile_contract.ps
 ---
 
 
+## 4.4) Prompt eval (dev)
+
+Какие env выставить:
+- BOT_BACKEND_TOKEN
+- EVAL_FREE_USER_ID
+- EVAL_PRO_USER_ID
+
+Пример запуска PowerShell:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+$env:BOT_BACKEND_TOKEN="YOUR_DEV_TOKEN"
+$env:EVAL_FREE_USER_ID="999001"
+$env:EVAL_PRO_USER_ID="999002"
+python scripts/prompt_eval_run.py --max 25
+```
+
 ## 5) Если что-то не работает
 
 Проверь:
