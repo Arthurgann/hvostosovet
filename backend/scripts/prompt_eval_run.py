@@ -16,6 +16,7 @@ def detect_flags(answer_text: str, response_json: dict) -> set[str]:
     flags: set[str] = set()
     text = (answer_text or "").strip()
     lower = text.lower()
+    normalized = text.replace("\r\n", "\n")
 
     has_numbering = bool(_match(r"(?m)^\s*\d+\.", text))
     has_bullets = bool(_match(r"(?m)^\s*[-•]", text))
@@ -36,6 +37,12 @@ def detect_flags(answer_text: str, response_json: dict) -> set[str]:
     )
     if sum([has_numbering, has_bullets, has_sections]) >= 2:
         flags.add("structure")
+
+    paragraphs = [block.strip() for block in normalized.split("\n\n") if block.strip()]
+    non_empty_lines = [line for line in normalized.split("\n") if line.strip()]
+    empty_lines = [line for line in normalized.split("\n") if not line.strip()]
+    if len(paragraphs) >= 3 or (len(non_empty_lines) >= 6 and len(empty_lines) >= 2):
+        flags.add("has_paragraphs")
 
     followup_phrases = [
         "уточните",
