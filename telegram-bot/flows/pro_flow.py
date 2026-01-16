@@ -28,6 +28,7 @@ from ui.labels import (
     BTN_HEALTH_FEATURES,
     BTN_VACCINES_PREVENTION,
     BTN_IMPORTANT,
+    BTN_LIFESTYLE,
     BTN_HEALTH_SKIN,
     BTN_HEALTH_GI,
     BTN_HEALTH_ALLERGY,
@@ -41,6 +42,13 @@ from ui.labels import (
     BTN_MY_PET,
 )
 from ui.keyboards import kb_mode_selection, kb_my_pet_short
+from ui.keyboards import (
+    kb_life_housing,
+    kb_life_outdoor,
+    kb_life_diet,
+    kb_life_activity,
+    kb_life_walks,
+)
 from ui.texts import TEXT_WHAT_INTERESTS_YOU
 from ui.main_menu import show_main_menu
 from services.state import (
@@ -89,6 +97,11 @@ from services.state import (
     PRO_STEP_VACCINES_DETAILS,
     PRO_STEP_PARASITES_DETAILS,
     PRO_STEP_OWNER_NOTE,
+    PRO_STEP_LIFE_HOUSING,
+    PRO_STEP_LIFE_OUTDOOR,
+    PRO_STEP_LIFE_DIET,
+    PRO_STEP_LIFE_ACTIVITY,
+    PRO_STEP_LIFE_WALKS,
 )
 
 
@@ -199,6 +212,7 @@ def build_post_menu_keyboard(include_save: bool = False) -> InlineKeyboardMarkup
             [InlineKeyboardButton(BTN_HEALTH_FEATURES, callback_data="pro_post:health")],
             [InlineKeyboardButton(BTN_VACCINES_PREVENTION, callback_data="pro_post:vaccines")],
             [InlineKeyboardButton(BTN_IMPORTANT, callback_data="pro_post:note")],
+            [InlineKeyboardButton(BTN_LIFESTYLE, callback_data="pro_edit_lifestyle")],
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -286,6 +300,26 @@ def build_parasites_details_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _get_pet_type_for_lifestyle(user_id: int) -> str:
+    profile = get_pet_profile(user_id) or get_pro_profile(user_id) or {}
+    pet_type = profile.get("type") or profile.get("species")
+    return pet_type or "other"
+
+
+def _set_lifestyle_field(user_id: int, field: str, value: str | int | None) -> None:
+    if value is None:
+        return
+    set_profile_field(user_id, f"lifestyle.{field}", value)
+    set_profile_dirty(user_id, True)
+
+
+async def _edit_or_reply(message: Message, text: str, reply_markup=None) -> None:
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except Exception:
+        await message.reply(text, reply_markup=reply_markup)
+
+
 def get_pro_prompt_and_keyboard(user_id: int, step: str) -> tuple[str, InlineKeyboardMarkup] | None:
     if step == PRO_STEP_SPECIES:
         return "Кто у вас?", build_species_keyboard()
@@ -333,6 +367,17 @@ def get_pro_prompt_and_keyboard(user_id: int, step: str) -> tuple[str, InlineKey
             f"{status_line}\n{status_hint}\n",
             build_post_menu_keyboard(),
         )
+    if step == PRO_STEP_LIFE_HOUSING:
+        return "Где живёт питомец?", kb_life_housing()
+    if step == PRO_STEP_LIFE_OUTDOOR:
+        return "Бывает ли питомец на улице?", kb_life_outdoor()
+    if step == PRO_STEP_LIFE_DIET:
+        return "Как питается питомец?", kb_life_diet()
+    if step == PRO_STEP_LIFE_ACTIVITY:
+        return "Уровень активности питомца?", kb_life_activity()
+    if step == PRO_STEP_LIFE_WALKS:
+        pet_type = _get_pet_type_for_lifestyle(user_id)
+        return "Сколько прогулок в день?", kb_life_walks(pet_type)
     if step == PRO_STEP_HEALTH_PICK:
         return "Особенности (если известно). Выберите пункт или нажмите Пропустить.", build_health_keyboard()
     if step == PRO_STEP_VACCINES:
@@ -629,6 +674,81 @@ async def handle_pro_callbacks(
         await start_pro_flow(callback_query.message, user_id, force=True)
         return
 
+    if data == "pro_edit_lifestyle":
+        set_pro_step(user_id, PRO_STEP_LIFE_HOUSING, True)
+        await _edit_or_reply(
+            callback_query.message,
+            "Где живёт питомец?",
+            reply_markup=kb_life_housing(),
+        )
+        return
+
+    if data.startswith("pro_life_housing_"):
+        value = data.split("pro_life_housing_", 1)[1]
+        if value != "skip":
+            _set_lifestyle_field(user_id, "housing", value)
+        set_pro_step(user_id, PRO_STEP_LIFE_OUTDOOR, True)
+        await _edit_or_reply(
+            callback_query.message,
+            "Бывает ли питомец на улице?",
+            reply_markup=kb_life_outdoor(),
+        )
+        return
+
+    if data.startswith("pro_life_outdoor_"):
+        value = data.split("pro_life_outdoor_", 1)[1]
+        if value != "skip":
+            _set_lifestyle_field(user_id, "outdoor", value)
+        set_pro_step(user_id, PRO_STEP_LIFE_DIET, True)
+        await _edit_or_reply(
+            callback_query.message,
+            "Как питается питомец?",
+            reply_markup=kb_life_diet(),
+        )
+        return
+
+    if data.startswith("pro_life_diet_"):
+        value = data.split("pro_life_diet_", 1)[1]
+        if value != "skip":
+            _set_lifestyle_field(user_id, "diet_type", value)
+        set_pro_step(user_id, PRO_STEP_LIFE_ACTIVITY, True)
+        await _edit_or_reply(
+            callback_query.message,
+            "Уровень активности питомца?",
+            reply_markup=kb_life_activity(),
+        )
+        return
+
+    if data.startswith("pro_life_activity_"):
+        value = data.split("pro_life_activity_", 1)[1]
+        if value != "skip":
+            _set_lifestyle_field(user_id, "activity_level", value)
+        pet_type = _get_pet_type_for_lifestyle(user_id)
+        if pet_type == "dog":
+            set_pro_step(user_id, PRO_STEP_LIFE_WALKS, True)
+            await _edit_or_reply(
+                callback_query.message,
+                "Сколько прогулок в день?",
+                reply_markup=kb_life_walks(pet_type),
+            )
+            return
+        set_pro_step(user_id, PRO_STEP_POST_MENU, True)
+        await show_post_menu(callback_query.message, user_id)
+        return
+
+    if data == "pro_life_walks_skip":
+        set_pro_step(user_id, PRO_STEP_POST_MENU, True)
+        await show_post_menu(callback_query.message, user_id)
+        return
+
+    if data == "pro_life_walks_ask":
+        set_pro_step(user_id, PRO_STEP_LIFE_WALKS, False)
+        await _edit_or_reply(
+            callback_query.message,
+            "Введите число прогулок в день (1–6) или напишите 'пропустить'.",
+        )
+        return
+
     if data.startswith("pro_species:"):
         value = data.split(":", 1)[1]
         set_profile_field(user_id, "type", value)
@@ -842,7 +962,9 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
     user_id = message.from_user.id
     pro_step = get_pro_step(user_id)
 
-    if pro_step == PRO_STEP_NONE or not pro_step.startswith("pro_"):
+    if pro_step == PRO_STEP_NONE or not (
+        pro_step.startswith("pro_") or pro_step.startswith("life_")
+    ):
         return False
 
     if is_awaiting_button(user_id):
@@ -944,6 +1066,51 @@ async def handle_pro_text_step(client_tg: Client, message: Message) -> bool:
             "Особенности (если известно). Выберите пункт или нажмите Пропустить.",
             reply_markup=build_health_keyboard(),
         )
+        return True
+
+    if pro_step == PRO_STEP_LIFE_WALKS:
+        raw = (message.text or "").strip()
+        if raw.casefold() in ("пропустить", "skip", "/skip"):
+            profile = get_pet_profile(user_id) or get_pro_profile(user_id) or {}
+            lifestyle = profile.get("lifestyle") if isinstance(profile, dict) else None
+            existing = lifestyle.get("walks_per_day") if isinstance(lifestyle, dict) else None
+            if existing is not None:
+                set_profile_field(user_id, "lifestyle.walks_per_day", None)
+                set_profile_dirty(user_id, True)
+            set_pro_step(user_id, PRO_STEP_POST_MENU, True)
+            await show_post_menu(message, user_id)
+            return True
+        word_map = {
+            "ноль": 0,
+            "один": 1,
+            "два": 2,
+            "три": 3,
+            "четыре": 4,
+            "пять": 5,
+            "шесть": 6,
+            "семь": 7,
+            "восемь": 8,
+            "девять": 9,
+            "десять": 10,
+        }
+        lowered = raw.casefold()
+        match = re.search(r"(\d+)", lowered)
+        walks = None
+        if match:
+            try:
+                walks = int(match.group(1))
+            except ValueError:
+                walks = None
+        else:
+            for word, value in word_map.items():
+                if word in lowered:
+                    walks = value
+                    break
+        if walks is not None and 0 <= walks <= 10:
+            set_profile_field(user_id, "lifestyle.walks_per_day", walks)
+            set_profile_dirty(user_id, True)
+        set_pro_step(user_id, PRO_STEP_POST_MENU, True)
+        await show_post_menu(message, user_id)
         return True
 
     if pro_step == PRO_STEP_OWNER_NOTE:

@@ -22,6 +22,11 @@ PRO_STEP_PARASITES = "pro_parasites"
 PRO_STEP_VACCINES_DETAILS = "pro_vaccines_details"
 PRO_STEP_PARASITES_DETAILS = "pro_parasites_details"
 PRO_STEP_OWNER_NOTE = "pro_owner_note"
+PRO_STEP_LIFE_HOUSING = "life_housing"
+PRO_STEP_LIFE_OUTDOOR = "life_outdoor"
+PRO_STEP_LIFE_DIET = "life_diet"
+PRO_STEP_LIFE_ACTIVITY = "life_activity"
+PRO_STEP_LIFE_WALKS = "life_walks"
 
 
 def get_profile(user_id: int) -> dict | None:
