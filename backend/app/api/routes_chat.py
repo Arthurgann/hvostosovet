@@ -120,6 +120,51 @@ def normalize_attachments(attachments: list[dict] | None) -> list[dict]:
     return normalized
 
 
+def format_lifestyle_block(lifestyle: dict | None) -> str | None:
+    if not isinstance(lifestyle, dict):
+        return None
+    housing_map = {
+        "apartment": "квартира",
+        "house": "дом",
+        "yard": "двор",
+        "outdoor": "улица",
+    }
+    outdoor_map = {
+        "no": "нет",
+        "sometimes": "иногда",
+        "regular": "регулярно",
+    }
+    diet_map = {
+        "dry": "сухой корм",
+        "wet": "влажный корм",
+        "natural": "натуральный",
+        "mixed": "смешанный",
+    }
+    activity_map = {
+        "low": "низкий",
+        "medium": "средний",
+        "high": "высокий",
+    }
+    lines = []
+    housing = lifestyle.get("housing")
+    if housing in housing_map:
+        lines.append(f"— живёт: {housing_map[housing]}")
+    outdoor = lifestyle.get("outdoor")
+    if outdoor in outdoor_map:
+        lines.append(f"— на улице: {outdoor_map[outdoor]}")
+    diet_type = lifestyle.get("diet_type")
+    if diet_type in diet_map:
+        lines.append(f"— питание: {diet_map[diet_type]}")
+    activity_level = lifestyle.get("activity_level")
+    if activity_level in activity_map:
+        lines.append(f"— активность: {activity_map[activity_level]}")
+    walks_per_day = lifestyle.get("walks_per_day")
+    if isinstance(walks_per_day, int) and walks_per_day >= 0:
+        lines.append(f"— прогулок в день: {walks_per_day}")
+    if not lines:
+        return None
+    return "🏡 Условия жизни и питание:\n" + "\n".join(lines)
+
 
 
 @router.post("/chat/ask", dependencies=[Depends(require_bot_token)])
@@ -333,12 +378,19 @@ def chat_ask(
             if session_prefix:
                 final_user_text = f"{session_prefix}\n\nТекущий вопрос: {original_text}"
             if has_effective_pet_profile:
+                lifestyle_block = format_lifestyle_block(
+                    effective_pet_profile.get("lifestyle")
+                    if isinstance(effective_pet_profile, dict)
+                    else None
+                )
+                prefix = "ПРОФИЛЬ ПИТОМЦА (из анкеты пользователя):\n"
+                if lifestyle_block:
+                    prefix += lifestyle_block + "\n\n"
                 pet_profile_json = json.dumps(
                     effective_pet_profile, ensure_ascii=False
                 )
                 final_user_text = (
-                    "ПРОФИЛЬ ПИТОМЦА (из анкеты пользователя):\n"
-                    f"{pet_profile_json}\n\n{final_user_text}"
+                    prefix + pet_profile_json + "\n\n" + final_user_text
                 )
             selected_mode = (
                 active_mode if active_mode in PROMPTS_BY_MODE else DEFAULT_MODE
