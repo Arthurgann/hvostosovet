@@ -179,6 +179,65 @@ def format_pet_summary_full(profile: dict) -> str:
     if par_status:
         lines.append(f"🪲 Паразиты: {par_status}")
 
+    lifestyle = profile.get("lifestyle") or {}
+    if not isinstance(lifestyle, dict):
+        lifestyle = {}
+    lifestyle_items = []
+    if lifestyle:
+        housing_map = {
+            "apartment": "квартира",
+            "house": "дом",
+            "yard": "двор",
+            "outdoor": "улица",
+        }
+        outdoor_map = {
+            "no": "нет",
+            "sometimes": "иногда",
+            "regular": "регулярно",
+        }
+        diet_map = {
+            "dry": "сухой",
+            "wet": "влажный",
+            "natural": "натуральный",
+            "mixed": "смешанный",
+        }
+        activity_map = {
+            "low": "низкий",
+            "medium": "средний",
+            "high": "высокий",
+        }
+
+        def map_lifestyle_value(value, mapping, limit=80):
+            if value is None or value == "":
+                return None
+            if value in mapping:
+                return mapping[value]
+            if isinstance(value, str):
+                return clip(value, limit)
+            return str(value)
+
+        housing = map_lifestyle_value(lifestyle.get("housing"), housing_map)
+        if housing:
+            lifestyle_items.append(f"• Где живёт: {housing}")
+        outdoor = map_lifestyle_value(lifestyle.get("outdoor"), outdoor_map)
+        if outdoor:
+            lifestyle_items.append(f"• На улице: {outdoor}")
+        diet_type = map_lifestyle_value(lifestyle.get("diet_type"), diet_map)
+        if diet_type:
+            lifestyle_items.append(f"• Питание: {diet_type}")
+        activity_level = map_lifestyle_value(lifestyle.get("activity_level"), activity_map)
+        if activity_level:
+            lifestyle_items.append(f"• Активность: {activity_level}")
+        walks_per_day = lifestyle.get("walks_per_day")
+        if isinstance(walks_per_day, (int, float)) and not isinstance(walks_per_day, bool):
+            if walks_per_day >= 0:
+                walks_text = f"{walks_per_day:g}"
+                lifestyle_items.append(f"• Прогулок/день: {walks_text}")
+    if lifestyle_items:
+        lines.append("")
+        lines.append("🏡 Условия жизни и питание")
+        lines.extend(lifestyle_items)
+
     health = profile.get("health") or {}
     notes_by_tag = health.get("notes_by_tag") if isinstance(health, dict) else None
     notes_by_tag = notes_by_tag if isinstance(notes_by_tag, dict) else {}

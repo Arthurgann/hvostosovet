@@ -495,14 +495,26 @@ async def execute_pending_action(
     action: dict | None,
     send_backend_response_cb,
 ) -> None:
+    is_dirty_guard_msg = (
+        bool(message.text)
+        and "несохранённые изменения анкеты" in message.text.lower()
+    )
     if not action:
         await show_post_menu(message, user_id)
         return
     action_type = action.get("type")
     if action_type == "go_my_pet":
+        if is_dirty_guard_msg:
+            tmp = await message.reply("…")
+            await show_my_pet_short(tmp, user_id)
+            return
         await show_my_pet_short(message, user_id)
         return
     if action_type == "go_menu":
+        if is_dirty_guard_msg:
+            tmp = await message.reply("…")
+            await show_main_menu(tmp)
+            return
         await show_main_menu(message)
         return
     await show_post_menu(message, user_id)
