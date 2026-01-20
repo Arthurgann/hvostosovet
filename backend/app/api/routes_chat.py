@@ -38,7 +38,7 @@ from app.services.sessions import (
     normalize_session_context,
     upsert_session_turn,
 )
-from app.services.prompts import PROMPTS_BY_MODE
+from app.services.prompts import PROMPTS_BY_MODE_TEXT, PROMPTS_BY_MODE_VISION
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
@@ -392,12 +392,16 @@ def chat_ask(
                 final_user_text = (
                     prefix + pet_profile_json + "\n\n" + final_user_text
                 )
+            prompt_map = PROMPTS_BY_MODE_VISION if has_image else PROMPTS_BY_MODE_TEXT
             selected_mode = (
-                active_mode if active_mode in PROMPTS_BY_MODE else DEFAULT_MODE
+                active_mode if active_mode in prompt_map else DEFAULT_MODE
             )
-            system_prompt = PROMPTS_BY_MODE.get(
-                active_mode, PROMPTS_BY_MODE["emergency"]
-            )
+            system_prompt = prompt_map.get(selected_mode, prompt_map["emergency"])
+            if has_image:
+                system_prompt = (
+                    f"{system_prompt}\n\n"
+                    "FACT: В ЭТОМ сообщении пользователя ЕСТЬ изображение."
+                )
             logger.info(
                 "CHAT_PROMPT active_mode=%s selected_mode=%s",
                 active_mode,
