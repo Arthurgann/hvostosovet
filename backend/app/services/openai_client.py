@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import socket
+import time
 from urllib import request
 from urllib.error import HTTPError, URLError
 
@@ -62,6 +63,7 @@ def call_chat_completions_messages(
         headers=headers,
     )
 
+    t0 = time.perf_counter()
     try:
         with request.urlopen(req, timeout=timeout_sec) as resp:
             body = resp.read().decode("utf-8")
@@ -77,7 +79,15 @@ def call_chat_completions_messages(
         raise RuntimeError(f"{provider}_url_error") from exc
     except socket.timeout as exc:
         raise LlmTimeoutError(f"{provider}_timeout") from exc
-
+    finally:
+        dt = time.perf_counter() - t0
+        logger.info(
+            "LLM_DONE provider=%s model=%s seconds=%.2f timeout=%s",
+            provider,
+            model,
+            dt,
+            timeout_sec,
+        )
     response_json = json.loads(body)
     choices = response_json.get("choices") or []
     if not choices:

@@ -44,7 +44,7 @@ def ask_backend(
     )
 
     try:
-        with request.urlopen(req, timeout=25) as resp:
+        with request.urlopen(req, timeout=90) as resp:
             status_code = resp.getcode()
             raw = resp.read()
     except HTTPError as exc:
