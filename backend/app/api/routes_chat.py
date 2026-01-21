@@ -413,23 +413,70 @@ def chat_ask(
                 selected_mode,
             )
 
-            policy_name = "free_default"
+            # --- TEXT_PROVIDER + Free/Pro text models (manual switch) ---
+
+            text_provider = (os.getenv("TEXT_PROVIDER") or "openai").strip().lower()
+            if text_provider not in ("openai", "openrouter"):
+                text_provider = "openai"
+
+            # Text models (per provider, per plan)
+            openai_text_model_free = (
+                os.getenv("OPENAI_TEXT_MODEL_FREE")
+                or os.getenv("OPENAI_MODEL")
+                or "gpt-4.1-mini"
+            )
+            openai_text_model_pro = (
+                os.getenv("OPENAI_TEXT_MODEL_PRO")
+                or os.getenv("OPENAI_MODEL_PRO")
+                or os.getenv("OPENAI_MODEL")
+                or "gpt-4.1-mini"
+            )
+
+            openrouter_text_model_free = (
+                os.getenv("OPENROUTER_TEXT_MODEL_FREE")
+                or os.getenv("OPENROUTER_TEXT_MODEL")
+                or "openai/gpt-4o-mini"
+            )
+            openrouter_text_model_pro = (
+                os.getenv("OPENROUTER_TEXT_MODEL_PRO")
+                or os.getenv("OPENROUTER_TEXT_MODEL")
+                or "openai/gpt-4o-mini"
+            )
+
+            # Decide policy
+            if has_image:
+                policy_name = "pro_vision"
+            elif user_plan == "pro":
+                policy_name = "pro_default"
+            else:
+                policy_name = "free_default"
+
+            # Choose provider/model for TEXT policies from TEXT_PROVIDER
+            if text_provider == "openrouter":
+                free_text_model = openrouter_text_model_free
+                pro_text_model = openrouter_text_model_pro
+            else:
+                free_text_model = openai_text_model_free
+                pro_text_model = openai_text_model_pro
+
             policies = {
+                # Text (Free/Pro) — provider is switchable via TEXT_PROVIDER
                 "free_default": {
-                    "provider": "openai",
-                    "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+                    "provider": text_provider,
+                    "model": free_text_model,
                     "temperature": 0.2,
                     "max_tokens": 400,
                     "timeout_sec": 60,
                 },
                 "pro_default": {
-                    "provider": "openai",
-                    "model": os.getenv("OPENAI_MODEL_PRO")
-                    or os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+                    "provider": text_provider,
+                    "model": pro_text_model,
                     "temperature": 0.2,
                     "max_tokens": 600,
                     "timeout_sec": 60,
                 },
+
+                # Vision (Pro only) — ALWAYS OpenRouter
                 "pro_vision": {
                     "provider": "openrouter",
                     "model": os.getenv("OPENROUTER_VISION_MODEL", "openai/gpt-4o-mini"),
@@ -437,6 +484,8 @@ def chat_ask(
                     "max_tokens": 600,
                     "timeout_sec": 90,
                 },
+
+                # Research — оставляем как было (OpenAI)
                 "pro_research": {
                     "provider": "openai",
                     "model": os.getenv("OPENAI_MODEL_RESEARCH", "gpt-4o-mini"),
@@ -445,16 +494,16 @@ def chat_ask(
                     "timeout_sec": 90,
                 },
             }
-            if has_image:
-                policy_name = "pro_vision"
-            elif user_plan == "pro":
-                policy_name = "pro_default"
+
             llm_params = policies.get(policy_name, {}).copy()
+
+            # Hard rule: if has_image -> always openrouter vision model
             if has_image:
                 llm_params["provider"] = "openrouter"
                 llm_params["model"] = os.getenv(
                     "OPENROUTER_VISION_MODEL", "openai/gpt-4o-mini"
                 )
+
             logger.info(
                 "CHAT_HAS_IMAGE=%s policy=%s provider=%s",
                 "true" if has_image else "false",
@@ -464,12 +513,21 @@ def chat_ask(
 
             provider = llm_params.get("provider")
             model = llm_params.get("model")
-            if has_image and provider == "openrouter":
+
+            # Provider config guards (manual switching)
+            if provider == "openrouter":
                 if not (os.getenv("OPENROUTER_API_KEY") or "").strip():
                     dedup_mark_failed(cur, x_request_id, "openrouter_not_configured")
                     return JSONResponse(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         content={"error": "openrouter_not_configured"},
+                    )
+            else:
+                if not (os.getenv("OPENAI_API_KEY") or "").strip():
+                    dedup_mark_failed(cur, x_request_id, "openai_not_configured")
+                    return JSONResponse(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        content={"error": "openai_not_configured"},
                     )
 
             logger.info(

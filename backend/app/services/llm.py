@@ -44,7 +44,7 @@ def ask_llm(
             "OPENROUTER_BASE_URL",
             "https://openrouter.ai/api/v1/chat/completions",
         )
-        model = model or os.getenv("OPENROUTER_VISION_MODEL", "openai/gpt-4o-mini")
+        model = model or os.getenv("OPENROUTER_TEXT_MODEL", "openai/gpt-4o-mini")
     else:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
