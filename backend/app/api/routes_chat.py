@@ -56,6 +56,11 @@ VISION_REFUSAL_MARKERS = [
     "as a text-based model",
     "i'm unable to view images",
 ]
+VISION_HISTORY_REFUSAL_MARKERS = [
+    "не могу сказать, кто изображ",
+    "не вижу фото",
+    "не могу просматривать изображ",
+]
 
 MAX_ATTACHMENT_BYTES = 3_000_000
 
@@ -569,11 +574,19 @@ def chat_ask(
 
             if user_id:
                 try:
+                    answer_to_save = answer_text
+                    if has_image and answer_text:
+                        answer_lower = answer_text.lower()
+                        if any(
+                            marker in answer_lower
+                            for marker in VISION_HISTORY_REFUSAL_MARKERS
+                        ):
+                            answer_to_save = "[vision_refusal_ignored]"
                     upsert_session_turn(
                         cur,
                         user_id,
                         payload.text,
-                        answer_text,
+                        answer_to_save,
                         user_plan=user_plan,
                         session_context=session_context,
                         active_session_id=active_session_id,

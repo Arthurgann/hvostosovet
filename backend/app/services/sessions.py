@@ -9,6 +9,11 @@ from app.core.config import SESSION_MAX_TURNS, SESSION_TTL_MIN, PRO_SESSION_TTL_
 
 logger = logging.getLogger("hvostosovet")
 DEFAULT_MODE = "emergency"
+VISION_REFUSAL_HISTORY_MARKERS = [
+    "не могу сказать, кто изображ",
+    "не вижу фото",
+    "не могу просматривать изображ",
+]
 
 
 def get_session_ttl_min(user_plan: str | None) -> int:
@@ -118,6 +123,12 @@ def build_context_prefix(session_context, active_mode: str | None = None) -> str
             continue
         q = (turn.get("q") or "").strip()
         a = (turn.get("a") or "").strip()
+        if a == "[vision_refusal_ignored]":
+            continue
+        if a:
+            a_lower = a.lower()
+            if any(marker in a_lower for marker in VISION_REFUSAL_HISTORY_MARKERS):
+                continue
         if not q and not a:
             continue
         lines = []
