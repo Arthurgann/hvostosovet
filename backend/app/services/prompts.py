@@ -198,6 +198,13 @@ TEXT_IMAGE_CAPABILITY = """Важно: пользователь может пр�
 """
 
 
+FREE_PHOTO_UPSELL_SUFFIX = """
+Если вопрос про внешние признаки, где фото действительно помогает уточнить рекомендации (кожа/шерсть, уши, глаза, раны, припухлости, выделения, стул/рвота и т.п.), добавьте в ответ одну короткую фразу с просьбой о фото.
+
+Фраза должна звучать естественно и по делу (обычно рядом с уточняющими вопросами в конце), например:
+«Если можете — пришлите/прикрепите фото, так будет проще оценить».
+"""
+
 CARE_SYSTEM_PROMPT_VISION = VISION_RULES + CARE_SYSTEM_PROMPT
 VACCINES_SYSTEM_PROMPT_VISION = VISION_RULES + VACCINES_SYSTEM_PROMPT
 EMERGENCY_SYSTEM_PROMPT_VISION = VISION_RULES + EMERGENCY_SYSTEM_PROMPT
@@ -213,3 +220,43 @@ PROMPTS_BY_MODE_VISION = {
     "vaccines": VACCINES_SYSTEM_PROMPT_VISION,
     "emergency": EMERGENCY_SYSTEM_PROMPT_VISION,
 }
+
+
+def _already_asked_for_photo(session_context: dict) -> bool:
+    turns = session_context.get("turns", [])
+    if not isinstance(turns, list) or not turns:
+        return False
+    markers = ("фото", "фотк", "снимок", "изображен", "прикреп")
+    recent_turns = turns[-8:]
+    for turn in recent_turns:
+        if not isinstance(turn, dict):
+            continue
+        answer_text = turn.get("a", "")
+        if not isinstance(answer_text, str) or not answer_text:
+            continue
+        answer_lower = answer_text.lower()
+        if any(marker in answer_lower for marker in markers):
+            return True
+    return False
+
+
+def get_system_prompt(
+    mode: str,
+    has_image: bool,
+    policy_name: str,
+    session_context: dict | None = None,
+) -> str:
+    prompt_map = PROMPTS_BY_MODE_VISION if has_image else PROMPTS_BY_MODE_TEXT
+    selected_mode = mode if mode in prompt_map else "emergency"
+    system_prompt = prompt_map.get(selected_mode, prompt_map["emergency"])
+    if (
+        policy_name == "free_default"
+        and not has_image
+        and selected_mode in {"care", "emergency"}
+        and not (
+            session_context is not None
+            and _already_asked_for_photo(session_context)
+        )
+    ):
+        system_prompt = f"{system_prompt}\n\n{FREE_PHOTO_UPSELL_SUFFIX}"
+    return system_prompt

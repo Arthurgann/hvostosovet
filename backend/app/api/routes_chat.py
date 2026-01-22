@@ -38,7 +38,7 @@ from app.services.sessions import (
     normalize_session_context,
     upsert_session_turn,
 )
-from app.services.prompts import PROMPTS_BY_MODE_TEXT, PROMPTS_BY_MODE_VISION
+from app.services.prompts import get_system_prompt
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
@@ -148,7 +148,8 @@ def has_photo_intent(text: str | None) -> bool:
             "что на снимке",
             "нужно фото",
             "лучше фото",
-            "снимок",
+            "скинуть снимок",
+            "прислать снимок",
         ]
     )
 
@@ -425,11 +426,25 @@ def chat_ask(
                 final_user_text = (
                     prefix + pet_profile_json + "\n\n" + final_user_text
                 )
-            prompt_map = PROMPTS_BY_MODE_VISION if has_image else PROMPTS_BY_MODE_TEXT
+            # Decide policy
+            if has_image:
+                policy_name = "pro_vision"
+            elif user_plan == "pro":
+                policy_name = "pro_default"
+            else:
+                policy_name = "free_default"
+
             selected_mode = (
-                active_mode if active_mode in prompt_map else DEFAULT_MODE
+                active_mode
+                if active_mode in {"care", "vaccines", "emergency"}
+                else DEFAULT_MODE
             )
-            system_prompt = prompt_map.get(selected_mode, prompt_map["emergency"])
+            system_prompt = get_system_prompt(
+                selected_mode,
+                has_image,
+                policy_name,
+                session_context=session_context,
+            )
             if has_image:
                 system_prompt = (
                     f"{system_prompt}\n\n"
@@ -470,14 +485,6 @@ def chat_ask(
                 or os.getenv("OPENROUTER_TEXT_MODEL")
                 or "openai/gpt-4o-mini"
             )
-
-            # Decide policy
-            if has_image:
-                policy_name = "pro_vision"
-            elif user_plan == "pro":
-                policy_name = "pro_default"
-            else:
-                policy_name = "free_default"
 
             # Choose provider/model for TEXT policies from TEXT_PROVIDER
             if text_provider == "openrouter":
