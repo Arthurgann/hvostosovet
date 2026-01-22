@@ -63,6 +63,10 @@ VISION_HISTORY_REFUSAL_MARKERS = [
 ]
 
 MAX_ATTACHMENT_BYTES = 3_000_000
+TEXT_FREE_PHOTO_NOTE = (
+    "ℹ️ Примечание: анализ фото доступен только в Pro. "
+    "Или можете продолжить по описанию — я постараюсь помочь."
+)
 
 
 class ChatAskUser(BaseModel):
@@ -123,6 +127,30 @@ def normalize_attachments(attachments: list[dict] | None) -> list[dict]:
             }
         )
     return normalized
+
+
+def has_photo_intent(text: str | None) -> bool:
+    if not text:
+        return False
+    t = text.lower()
+    return any(
+        phrase in t
+        for phrase in [
+            "можно фото",
+            "могу фото",
+            "прислать фото",
+            "отправить фото",
+            "скинуть фото",
+            "прикрепить фото",
+            "оценить по фото",
+            "посмотри фото",
+            "что на фото",
+            "что на снимке",
+            "нужно фото",
+            "лучше фото",
+            "снимок",
+        ]
+    )
 
 
 def format_lifestyle_block(lifestyle: dict | None) -> str | None:
@@ -569,6 +597,14 @@ def chat_ask(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     content={"error": "llm_failed"},
                 )
+
+            # Free: если пользователь упоминает фото, добавляем честную подсказку про Pro
+            if (
+                user_plan == "free"
+                and not has_image
+                and has_photo_intent(original_text)
+            ):
+                answer_text += "\n\n" + TEXT_FREE_PHOTO_NOTE
 
             if has_image and answer_text:
                 answer_lower = answer_text.lower()

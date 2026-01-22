@@ -191,15 +191,21 @@ EMERGENCY_SYSTEM_PROMPT = """Вы помогаете владельцу пито
 
 Когда вы впервые заметили кашель? Он чаще появляется после прогулки, при возбуждении или в спокойном состоянии?
 """
+TEXT_IMAGE_CAPABILITY = """Важно: пользователь может прикреплять изображения к сообщениям.
+Если пользователь просит оценить ситуацию «по фото» или «что на фото», но изображение не прикреплено,
+укажите, что в этом сообщении фото нет, и предложите прислать его.
+Если фото отправить не получается — предложите описать ситуацию словами.
+"""
+
 
 CARE_SYSTEM_PROMPT_VISION = VISION_RULES + CARE_SYSTEM_PROMPT
 VACCINES_SYSTEM_PROMPT_VISION = VISION_RULES + VACCINES_SYSTEM_PROMPT
 EMERGENCY_SYSTEM_PROMPT_VISION = VISION_RULES + EMERGENCY_SYSTEM_PROMPT
 
 PROMPTS_BY_MODE_TEXT = {
-    "care": CARE_SYSTEM_PROMPT,
-    "vaccines": VACCINES_SYSTEM_PROMPT,
-    "emergency": EMERGENCY_SYSTEM_PROMPT,
+    "care": CARE_SYSTEM_PROMPT + TEXT_IMAGE_CAPABILITY,
+    "vaccines": VACCINES_SYSTEM_PROMPT + TEXT_IMAGE_CAPABILITY,
+    "emergency": EMERGENCY_SYSTEM_PROMPT + TEXT_IMAGE_CAPABILITY,
 }
 
 PROMPTS_BY_MODE_VISION = {
