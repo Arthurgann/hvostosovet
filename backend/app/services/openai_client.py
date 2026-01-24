@@ -36,9 +36,18 @@ def call_chat_completions_messages(
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
     }
+
+    # GPT-5*: temperature поддерживает только default — не передаем параметр
+    if not (provider == "openai" and (model or "").startswith("gpt-5")):
+        payload["temperature"] = temperature
+    
+    # OpenAI GPT-5* требует max_completion_tokens вместо max_tokens
+    if provider == "openai" and (model or "").startswith("gpt-5"):
+        payload["max_completion_tokens"] = max_tokens
+    else:
+        payload["max_tokens"] = max_tokens
+
     has_multimodal = any(
         isinstance(message.get("content"), list) for message in messages
     )
@@ -88,15 +97,45 @@ def call_chat_completions_messages(
             dt,
             timeout_sec,
         )
+    
     response_json = json.loads(body)
     choices = response_json.get("choices") or []
     if not choices:
         raise RuntimeError(f"{provider}_empty_choices")
-    message = choices[0].get("message") or {}
+
+    choice0 = choices[0] or {}
+    message = choice0.get("message") or {}
+
+    # 1) Обычный текстовый ответ
     content = message.get("content")
-    if not content:
-        raise RuntimeError(f"{provider}_empty_content")
-    return content.strip()
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+
+    # 2) Некоторые модели/режимы могут вернуть refusal отдельным полем
+    refusal = message.get("refusal")
+    if isinstance(refusal, str) and refusal.strip():
+        return refusal.strip()
+
+    # 3) Если модель попыталась вызвать tool/function — контента может не быть
+    if message.get("tool_calls") or message.get("function_call"):
+        logger.warning(
+            "LLM_NON_TEXT_RESPONSE provider=%s model=%s finish_reason=%s message_keys=%s",
+            provider,
+            model,
+            choice0.get("finish_reason"),
+            list(message.keys()),
+        )
+        raise RuntimeError(f"{provider}_non_text_response")
+
+    # 4) Ничего не нашли — залогируем кусок ответа для диагностики
+    logger.warning(
+        "LLM_EMPTY_CONTENT provider=%s model=%s finish_reason=%s body_prefix=%s",
+        provider,
+        model,
+        choice0.get("finish_reason"),
+        body[:500],
+    )
+    raise RuntimeError(f"{provider}_empty_content")
 
 
 def call_chat_completions(
