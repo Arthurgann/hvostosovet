@@ -142,6 +142,13 @@ def has_photo_intent(text: str | None) -> bool:
             "отправить фото",
             "скинуть фото",
             "прикрепить фото",
+            "фото прикрепить",
+            "фото прислать",
+            "фото скинуть",
+            "фото отправить",
+            "фото можно",
+            "фото могу",
+            "фото принимаешь",
             "принимаешь фото",
             "оценить по фото",
             "посмотри фото",
@@ -446,11 +453,6 @@ def chat_ask(
                 policy_name,
                 session_context=session_context,
             )
-            if has_image:
-                system_prompt = (
-                    f"{system_prompt}\n\n"
-                    "FACT: В ЭТОМ сообщении пользователя ЕСТЬ изображение."
-                )
             logger.info(
                 "CHAT_PROMPT active_mode=%s selected_mode=%s",
                 active_mode,
